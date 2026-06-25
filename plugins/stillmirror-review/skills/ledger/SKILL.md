@@ -8,11 +8,15 @@ description: Generate an Allocation Ledger from local Claude Code traces and git
 Use this skill when the user asks where recent attention or agent budget has
 actually been allocated.
 
-Run:
+Run the bundled helper, resolved through the plugin root:
 
 ```sh
-plugins/stillmirror-review/bin/stillmirror-review ledger --since 30d
+"${CLAUDE_PLUGIN_ROOT}/bin/stillmirror-review" ledger --since 30d
 ```
+
+If you are working from a checkout of this repository instead of an installed
+plugin, run `plugins/stillmirror-review/bin/stillmirror-review ledger --since 30d`
+instead.
 
 The ledger must classify each allocation with one or more rubric labels:
 
@@ -22,5 +26,6 @@ The ledger must classify each allocation with one or more rubric labels:
 - `packaging_distribution`
 - `maintenance_debugging`
 - `exploration`
+- `noise`
 
 The output is evidence for user review, not a diagnosis.

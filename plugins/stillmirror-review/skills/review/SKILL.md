@@ -8,11 +8,15 @@ description: Generate a Project Drift Review markdown file for user alignment re
 Use this skill when the user asks for a StillMirror review of the current
 project.
 
-Run:
+Run the bundled helper, resolved through the plugin root:
 
 ```sh
-plugins/stillmirror-review/bin/stillmirror-review review --since 30d
+"${CLAUDE_PLUGIN_ROOT}/bin/stillmirror-review" review --since 30d
 ```
+
+If you are working from a checkout of this repository instead of an installed
+plugin, run `plugins/stillmirror-review/bin/stillmirror-review review --since 30d`
+instead.
 
 The review must include:
 
@@ -28,7 +32,7 @@ or advice about what the user should pursue.
 After the user chooses an alignment label, write it back with:
 
 ```sh
-plugins/stillmirror-review/bin/stillmirror-review alignment record \
+"${CLAUDE_PLUGIN_ROOT}/bin/stillmirror-review" alignment record \
   --label necessary_support \
   --note "User confirmed these allocations support the accepted goal."
 ```

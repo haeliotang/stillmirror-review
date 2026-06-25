@@ -42,8 +42,8 @@ stillmirror-review 0.1.0
 
 Component inventory
   Skills (4)  goals, init, ledger, review
-  Hooks (7)  SessionStart, UserPromptSubmit, PostToolUse, TaskCreated,
-             TaskCompleted, Stop, SessionEnd
+  Hooks (6)  SessionStart, UserPromptSubmit, PostToolUse, SubagentStop,
+             Stop, SessionEnd
   MCP servers (0)
 ```
 
@@ -123,7 +123,8 @@ StillMirror Review writes local project state under:
 
 The default hook capture stores sanitized event summaries, hashes, resource
 types, tool names, file paths, and timestamps. It does not store raw prompts by
-default.
+default. Raw local traces also record the absolute working-directory path; they
+stay under `.stillmirror/` and are git-ignored, never transmitted.
 
 ## Allocation rubric
 
@@ -135,6 +136,7 @@ Each `AllocationEntry` can use one or more labels:
 - `packaging_distribution`
 - `maintenance_debugging`
 - `exploration`
+- `noise` (session lifecycle/control events with no allocation signal)
 
 ## Boundaries
 

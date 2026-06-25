@@ -34,18 +34,7 @@
         ]
       }
     ],
-    "TaskCreated": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/stillmirror-capture",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "TaskCompleted": [
+    "SubagentStop": [
       {
         "hooks": [
           {

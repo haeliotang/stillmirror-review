@@ -102,6 +102,20 @@ RUBRIC: dict[str, dict[str, Any]] = {
             "candidate",
         ],
     },
+    "noise": {
+        "description": "Session lifecycle or control events that carry no allocation signal (session start/stop, notifications, subagent stop).",
+        "patterns": [],
+    },
+}
+
+
+LIFECYCLE_EVENTS = {
+    "SessionStart",
+    "SessionEnd",
+    "Stop",
+    "SubagentStop",
+    "Notification",
+    "PreCompact",
 }
 
 
@@ -335,7 +349,10 @@ def event_text(event: dict[str, Any]) -> str:
     summary = event.get("tool_input_summary")
     if isinstance(summary, dict):
         pieces.extend(str(value) for value in summary.get("keys") or [])
-        pieces.extend(str(value) for value in summary.get("paths") or [])
+        # Use only the file name, not the full path. Directory segments
+        # (and the project's own name) would otherwise inject rubric
+        # keywords into every event and pollute the classification.
+        pieces.extend(Path(str(value)).name for value in summary.get("paths") or [])
         if isinstance(summary.get("command"), dict):
             pieces.append(str(summary["command"].get("first_token") or ""))
         if isinstance(summary.get("description"), dict):
@@ -345,13 +362,31 @@ def event_text(event: dict[str, Any]) -> str:
     return " ".join(pieces).casefold()
 
 
-def classify(text: str, accepted_goals: list[dict[str, Any]]) -> tuple[list[str], str, str, float, list[str]]:
+def token_match(pattern: str, text: str) -> bool:
+    """Match a rubric pattern at a word boundary, not as a raw substring.
+
+    Word-boundary matching keeps inflections (``hook`` -> ``hooks``) while
+    avoiding mid-word false positives (``test`` inside ``latest``, ``fix``
+    inside ``prefix``).
+    """
+    return re.search(r"\b" + re.escape(pattern), text) is not None
+
+
+def classify(
+    text: str,
+    accepted_goals: list[dict[str, Any]],
+    hook_event_name: str = "",
+) -> tuple[list[str], str, str, float, list[str]]:
+    # Lifecycle/control events carry no allocation signal; label them as
+    # noise instead of letting them default into exploration.
+    if hook_event_name in LIFECYCLE_EVENTS:
+        return ["noise"], "", "unknown", 0.6, []
     labels: list[str] = []
     for label, spec in RUBRIC.items():
-        if label == "core_problem":
+        if label in ("core_problem", "noise"):
             continue
         patterns = spec.get("patterns") or []
-        if any(pattern in text for pattern in patterns):
+        if any(token_match(pattern, text) for pattern in patterns):
             labels.append(label)
     related_goal = ""
     goal_hits = []
@@ -360,7 +395,7 @@ def classify(text: str, accepted_goals: list[dict[str, Any]]) -> tuple[list[str]
         if not statement:
             continue
         tokens = [token for token in re.split(r"[^a-zA-Z0-9_]+", statement.casefold()) if len(token) >= 4]
-        if tokens and any(token in text for token in tokens):
+        if tokens and any(token_match(token, text) for token in tokens):
             goal_hits.append(statement)
     if goal_hits:
         labels.insert(0, "core_problem")
@@ -371,13 +406,15 @@ def classify(text: str, accepted_goals: list[dict[str, Any]]) -> tuple[list[str]
     if not labels:
         labels = ["exploration"]
         confidence = 0.35
+        ambiguity = ["no rubric or goal signal; defaulted to exploration"]
     else:
-        confidence = min(0.85, 0.45 + 0.1 * len(labels))
+        # A single clean match is the most confident outcome; each extra
+        # label means more ambiguity, so confidence decreases, not increases.
+        count = len(labels)
+        confidence = 0.7 if count == 1 else max(0.4, 0.75 - 0.1 * (count - 1))
+        ambiguity = ["multiple rubric labels matched"] if count > 1 else []
     # Stable order and dedupe.
     labels = [label for label in RUBRIC if label in set(labels)]
-    ambiguity = []
-    if len(labels) > 1:
-        ambiguity.append("multiple rubric labels matched")
     return labels, related_goal, supports_mainline, confidence, ambiguity
 
 
@@ -417,6 +454,7 @@ def git_entries(root: Path, since: dt.datetime) -> list[dict[str, Any]]:
             text=True,
             encoding="utf-8",
             errors="replace",
+            timeout=10,
         ).stdout
     except Exception:
         return []
@@ -455,7 +493,9 @@ def build_ledger(root: Path, since_value: str) -> dict[str, Any]:
     entries = []
     for event in events:
         text = event_text(event)
-        labels, related_goal, supports_mainline, confidence, ambiguity = classify(text, accepted_goals)
+        labels, related_goal, supports_mainline, confidence, ambiguity = classify(
+            text, accepted_goals, str(event.get("hook_event_name") or "")
+        )
         entries.append(
             {
                 "schema_version": 1,
@@ -514,8 +554,28 @@ def render_review(root: Path, since_value: str) -> Path:
         for goal in accepted:
             lines.append(f"- {goal.get('statement') or goal.get('goal')}")
     else:
-        lines.append("- (none recorded yet)")
-    lines.extend(["", "## Allocation Ledger Summary", ""])
+        lines.extend(
+            [
+                "- (none recorded yet)",
+                "",
+                "> No accepted goals are recorded, so no allocation can be matched to",
+                "> `core_problem`. Add goals first to enable core-problem detection:",
+                ">",
+                "> ```sh",
+                '> stillmirror-review goals add "<your goal>"',
+                "> ```",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "## Allocation Ledger Summary",
+            "",
+            "_Percentages are the share of all label assignments, not of entries; a"
+            " single entry may carry multiple labels._",
+            "",
+        ]
+    )
     for label in RUBRIC:
         count = counts.get(label, 0)
         pct = round(count * 100 / total)
@@ -532,6 +592,8 @@ def render_review(root: Path, since_value: str) -> Path:
     core = counts.get("core_problem", 0)
     if ledger.get("entry_count", 0) == 0:
         lines.append("- No allocation entries were observed in this window.")
+    elif not accepted:
+        lines.append("- `core_problem` cannot be evaluated because no accepted goals are recorded; add goals and regenerate this review.")
     elif core == 0:
         lines.append("- No entries were classified as `core_problem`; review whether this is missing context, necessary support, exploration, or misclassification.")
     else:

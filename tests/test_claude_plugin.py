@@ -40,6 +40,7 @@ class StillMirrorPluginTests(unittest.TestCase):
                     "packaging_distribution",
                     "maintenance_debugging",
                     "exploration",
+                    "noise",
                 },
             )
 

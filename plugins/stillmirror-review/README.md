@@ -76,9 +76,12 @@ default. To opt in to short prompt previews, set:
 export STILLMIRROR_CAPTURE_PROMPT_TEXT=1
 ```
 
+Raw local traces also record the absolute working-directory path. They stay
+under `.stillmirror/` and are git-ignored, never transmitted.
+
 ## AllocationEntry rubric
 
-Every allocation entry uses one or more of these six classes:
+Every allocation entry uses one or more of these seven classes:
 
 - `core_problem`
 - `support_infrastructure`
@@ -86,6 +89,7 @@ Every allocation entry uses one or more of these six classes:
 - `packaging_distribution`
 - `maintenance_debugging`
 - `exploration`
+- `noise` — session lifecycle/control events that carry no allocation signal
 
 Example:
 
@@ -94,7 +98,7 @@ Example:
   "allocated_to": ["support_infrastructure", "maintenance_debugging"],
   "related_goal": "hook reliability",
   "supports_mainline": "unknown",
-  "confidence": 0.68
+  "confidence": 0.65
 }
 ```
 
