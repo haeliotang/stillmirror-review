@@ -1,8 +1,10 @@
 # StillMirror Review
 
-Project Drift Review for agentic work.
+The review layer for agentic work.
 
-StillMirror Review observes:
+StillMirror Review helps you review *what you actually let happen* versus *what
+you meant*, by joining two spines — accepted-goal provenance and allocation
+evidence. It observes:
 
 - what problem seems to be driving the project;
 - where attention and agent budget are actually allocated;
@@ -43,9 +45,13 @@ You can also run the bundled scripts directly:
 
 ```sh
 plugins/stillmirror-review/bin/stillmirror-review init
+plugins/stillmirror-review/bin/stillmirror-review problem set "Validate StillMirror as a review layer"
 plugins/stillmirror-review/bin/stillmirror-review goals add "Maintain hook reliability"
-plugins/stillmirror-review/bin/stillmirror-review goals list
+plugins/stillmirror-review/bin/stillmirror-review goals replace "Maintain hook reliability" --with "Ship a trustworthy review layer"
+plugins/stillmirror-review/bin/stillmirror-review goals retire "<goal id or statement>"
+plugins/stillmirror-review/bin/stillmirror-review goals events
 plugins/stillmirror-review/bin/stillmirror-review ledger --since 30d
+plugins/stillmirror-review/bin/stillmirror-review correct --event <event_id> --label evaluation
 plugins/stillmirror-review/bin/stillmirror-review review --since 30d
 plugins/stillmirror-review/bin/stillmirror-review alignment record --label necessary_support
 plugins/stillmirror-review/bin/stillmirror-review alignment list
@@ -58,14 +64,11 @@ The plugin writes only inside the current project:
 ```text
 .stillmirror/
   traces/
-  runs/
-  problems/
-  goals/
-  allocations/
-  alignment/
-  evidence/
-  snapshots/
-  reviews/
+  problems/      mainline-hypothesis.json
+  goals/         accepted-goals.json, goal-events.jsonl
+  allocations/   allocation-ledger.json, corrections.jsonl, rubric.json
+  alignment/     alignment-reviews.jsonl
+  reviews/       *-project-alignment-review.md
 ```
 
 The default hook capture stores sanitized event summaries, hashes, resource
@@ -91,14 +94,22 @@ Every allocation entry uses one or more of these seven classes:
 - `exploration`
 - `noise` — session lifecycle/control events that carry no allocation signal
 
-Example:
+Each entry also carries a **receipt** (the matched patterns and goal tokens
+behind its label) and a `review_state`. A human `correct` overrides the
+classifier on every later run:
 
 ```json
 {
   "allocated_to": ["support_infrastructure", "maintenance_debugging"],
   "related_goal": "hook reliability",
   "supports_mainline": "unknown",
-  "confidence": 0.65
+  "confidence": 0.65,
+  "review_state": "unreviewed",
+  "receipt": {
+    "matched_patterns": {"support_infrastructure": ["hook"], "maintenance_debugging": ["fix"]},
+    "goal_signals": [{"statement": "hook reliability", "tokens": ["hook"]}],
+    "auto_labels": ["support_infrastructure", "maintenance_debugging"]
+  }
 }
 ```
 

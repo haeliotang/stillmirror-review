@@ -1,7 +1,7 @@
 {
   "name": "stillmirror-review",
-  "version": "0.1.0",
-  "description": "Project Drift Review for agentic work. Makes allocation trails visible for user review.",
+  "version": "0.2.0",
+  "description": "The review layer for agentic work. Joins accepted-goal provenance with allocation evidence for user alignment review.",
   "author": {
     "name": "Haelio Tang",
     "email": "stillmirror@haelio.cc"

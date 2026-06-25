@@ -232,6 +232,83 @@ def accepted_goals_path(root: Path) -> Path:
     return sm_dir(root) / "goals" / "accepted-goals.json"
 
 
+def goal_events_path(root: Path) -> Path:
+    return sm_dir(root) / "goals" / "goal-events.jsonl"
+
+
+GOAL_EVENT_TYPES = {
+    "goal_introduced",
+    "goal_reinforced",
+    "goal_replaced",
+    "goal_retired",
+}
+
+
+def append_goal_event(
+    root: Path,
+    event_type: str,
+    goal_id: str,
+    statement: str,
+    source: str = "user",
+    note: str = "",
+    supersedes: str = "",
+) -> dict[str, Any]:
+    """Append a goal-lifecycle event. This log is provenance, not state:
+
+    accepted-goals.json holds the *current* projection; this log holds *how it
+    got there* (introduced / reinforced / replaced / retired).
+    """
+    record: dict[str, Any] = {
+        "schema_version": 1,
+        "recorded_at": utc_now(),
+        "type": event_type,
+        "goal_id": goal_id,
+        "statement": statement,
+        "source": source,
+        "note": note,
+    }
+    if supersedes:
+        record["supersedes"] = supersedes
+    record["event_id"] = short_hash(json.dumps(record, sort_keys=True, ensure_ascii=False))
+    path = goal_events_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    return record
+
+
+def list_goal_events(root: Path) -> list[dict[str, Any]]:
+    path = goal_events_path(root)
+    if not path.exists():
+        return []
+    events = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            events.append(value)
+    return events
+
+
+def resolve_goal(doc: dict[str, Any], ref: str) -> dict[str, Any] | None:
+    """Resolve a goal by exact id, unique id substring, or exact statement."""
+    goals = doc.get("goals") or []
+    for goal in goals:
+        if goal.get("id") == ref:
+            return goal
+    matches = [goal for goal in goals if ref and ref in str(goal.get("id") or "")]
+    if len(matches) == 1:
+        return matches[0]
+    statement_matches = [goal for goal in goals if str(goal.get("statement") or "").strip() == ref.strip()]
+    if len(statement_matches) == 1:
+        return statement_matches[0]
+    return None
+
+
 def load_accepted_goals(root: Path) -> dict[str, Any]:
     init_project(root, quiet=True)
     doc = load_json(accepted_goals_path(root), {"schema_version": 1, "goals": []})
@@ -267,11 +344,91 @@ def add_goal(root: Path, statement: str, source: str, scope: str, review_state: 
     if existing:
         existing[0].update({**record, "created_at": existing[0].get("created_at") or now})
         saved = existing[0]
+        # Re-accepting a goal already in the project reinforces it.
+        append_goal_event(root, "goal_reinforced", goal_id, saved["statement"], source=source)
     else:
         doc["goals"].append(record)
         saved = record
+        append_goal_event(root, "goal_introduced", goal_id, saved["statement"], source=source)
     write_json(accepted_goals_path(root), doc)
     return saved
+
+
+def retire_goal(root: Path, ref: str, note: str = "") -> dict[str, Any]:
+    doc = load_accepted_goals(root)
+    goal = resolve_goal(doc, ref)
+    if goal is None:
+        raise SystemExit(f"no unique goal matched: {ref!r}")
+    goal["retired"] = True
+    goal["updated_at"] = utc_now()
+    write_json(accepted_goals_path(root), doc)
+    append_goal_event(root, "goal_retired", str(goal.get("id") or ""), str(goal.get("statement") or ""), note=note)
+    return goal
+
+
+def replace_goal(
+    root: Path,
+    ref: str,
+    new_statement: str,
+    source: str,
+    scope: str,
+    review_state: str,
+    note: str = "",
+) -> dict[str, Any]:
+    if not new_statement.strip():
+        raise SystemExit("replacement goal statement cannot be empty")
+    doc = load_accepted_goals(root)
+    old = resolve_goal(doc, ref)
+    if old is None:
+        raise SystemExit(f"no unique goal matched: {ref!r}")
+    old_id = str(old.get("id") or "")
+    new_id = f"goal-{slug(new_statement)}-{short_hash(new_statement)}"
+    now = utc_now()
+    new_goal = {
+        "id": new_id,
+        "statement": new_statement.strip(),
+        "source": source,
+        "scope": scope,
+        "review_state": review_state,
+        "created_at": now,
+        "updated_at": now,
+        "superseded": False,
+        "retired": False,
+    }
+    existing_new = [goal for goal in doc["goals"] if goal.get("id") == new_id]
+    if existing_new:
+        existing_new[0].update({**new_goal, "created_at": existing_new[0].get("created_at") or now})
+        saved_new = existing_new[0]
+    else:
+        doc["goals"].append(new_goal)
+        saved_new = new_goal
+    old["superseded"] = True
+    old["superseded_by"] = new_id
+    old["updated_at"] = now
+    write_json(accepted_goals_path(root), doc)
+    append_goal_event(root, "goal_replaced", new_id, saved_new["statement"], source=source, note=note, supersedes=old_id)
+    return {"old": old, "new": saved_new}
+
+
+def set_problem(root: Path, statement: str, confidence: float, alternatives: list[str]) -> dict[str, Any]:
+    init_project(root, quiet=True)
+    path = sm_dir(root) / "problems" / "mainline-hypothesis.json"
+    doc = load_json(path, {})
+    if not isinstance(doc, dict):
+        doc = {}
+    doc.update(
+        {
+            "schema_version": 1,
+            "statement": statement.strip(),
+            "confidence": max(0.0, min(1.0, confidence)),
+            "alternatives": alternatives or [],
+            "review_state": "reviewed",
+            "updated_at": utc_now(),
+        }
+    )
+    doc.setdefault("evidence", [])
+    write_json(path, doc)
+    return doc
 
 
 def list_goals(root: Path) -> dict[str, Any]:
@@ -376,30 +533,47 @@ def classify(
     text: str,
     accepted_goals: list[dict[str, Any]],
     hook_event_name: str = "",
-) -> tuple[list[str], str, str, float, list[str]]:
+) -> dict[str, Any]:
+    """Classify one event into rubric labels and return a self-describing receipt.
+
+    The returned dict carries not just the labels but *why* they were assigned
+    (which rubric patterns and which goal tokens matched), so a downstream
+    reviewer can audit the classification instead of trusting it blind.
+    """
     # Lifecycle/control events carry no allocation signal; label them as
     # noise instead of letting them default into exploration.
     if hook_event_name in LIFECYCLE_EVENTS:
-        return ["noise"], "", "unknown", 0.6, []
-    labels: list[str] = []
+        return {
+            "labels": ["noise"],
+            "related_goal": "",
+            "supports_mainline": "unknown",
+            "confidence": 0.6,
+            "ambiguity": [],
+            "matched_patterns": {},
+            "goal_signals": [],
+            "reason": "lifecycle_event",
+        }
+    matched_patterns: dict[str, list[str]] = {}
     for label, spec in RUBRIC.items():
         if label in ("core_problem", "noise"):
             continue
-        patterns = spec.get("patterns") or []
-        if any(token_match(pattern, text) for pattern in patterns):
-            labels.append(label)
+        hits = [pattern for pattern in (spec.get("patterns") or []) if token_match(pattern, text)]
+        if hits:
+            matched_patterns[label] = hits
+    labels = list(matched_patterns.keys())
     related_goal = ""
-    goal_hits = []
+    goal_signals: list[dict[str, Any]] = []
     for goal in accepted_goals:
         statement = str(goal.get("statement") or goal.get("goal") or "").strip()
         if not statement:
             continue
         tokens = [token for token in re.split(r"[^a-zA-Z0-9_]+", statement.casefold()) if len(token) >= 4]
-        if tokens and any(token_match(token, text) for token in tokens):
-            goal_hits.append(statement)
-    if goal_hits:
+        hits = sorted({token for token in tokens if token_match(token, text)})
+        if hits:
+            goal_signals.append({"goal_id": str(goal.get("id") or ""), "statement": statement, "tokens": hits})
+    if goal_signals:
         labels.insert(0, "core_problem")
-        related_goal = goal_hits[0]
+        related_goal = goal_signals[0]["statement"]
         supports_mainline = "yes"
     else:
         supports_mainline = "unknown"
@@ -415,7 +589,16 @@ def classify(
         ambiguity = ["multiple rubric labels matched"] if count > 1 else []
     # Stable order and dedupe.
     labels = [label for label in RUBRIC if label in set(labels)]
-    return labels, related_goal, supports_mainline, confidence, ambiguity
+    return {
+        "labels": labels,
+        "related_goal": related_goal,
+        "supports_mainline": supports_mainline,
+        "confidence": confidence,
+        "ambiguity": ambiguity,
+        "matched_patterns": matched_patterns,
+        "goal_signals": goal_signals,
+        "reason": "rubric_match" if matched_patterns or goal_signals else "default_exploration",
+    }
 
 
 def load_trace_events(root: Path, since: dt.datetime) -> list[dict[str, Any]]:
@@ -481,6 +664,51 @@ def git_entries(root: Path, since: dt.datetime) -> list[dict[str, Any]]:
     return entries
 
 
+def corrections_path(root: Path) -> Path:
+    return sm_dir(root) / "allocations" / "corrections.jsonl"
+
+
+def load_corrections(root: Path) -> dict[str, dict[str, Any]]:
+    """Return the latest human correction per event_id (last write wins)."""
+    path = corrections_path(root)
+    if not path.exists():
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict) and record.get("event_id"):
+            result[str(record["event_id"])] = record
+    return result
+
+
+def record_correction(root: Path, event_id: str, labels: list[str], note: str) -> dict[str, Any]:
+    init_project(root, quiet=True)
+    if not event_id.strip():
+        raise SystemExit("an event_id is required")
+    bad = sorted(set(labels) - set(RUBRIC.keys()))
+    if bad:
+        raise SystemExit(f"unknown rubric labels: {', '.join(bad)}")
+    if not labels:
+        raise SystemExit("at least one rubric label is required")
+    record = {
+        "schema_version": 1,
+        "recorded_at": utc_now(),
+        "event_id": event_id.strip(),
+        "labels": [label for label in RUBRIC if label in set(labels)],
+        "note": note,
+    }
+    path = corrections_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    return record
+
+
 def build_ledger(root: Path, since_value: str) -> dict[str, Any]:
     init_project(root, quiet=True)
     since = parse_since(since_value)
@@ -488,30 +716,90 @@ def build_ledger(root: Path, since_value: str) -> dict[str, Any]:
     accepted_goals = goals_doc.get("goals") if isinstance(goals_doc, dict) else []
     if not isinstance(accepted_goals, list):
         accepted_goals = []
+    corrections = load_corrections(root)
     events = load_trace_events(root, since)
-    events.extend(git_entries(root, since))
+    git_events = git_entries(root, since)
+    events.extend(git_events)
     entries = []
+    reinforcement: Counter[str] = Counter()
     for event in events:
         text = event_text(event)
-        labels, related_goal, supports_mainline, confidence, ambiguity = classify(
-            text, accepted_goals, str(event.get("hook_event_name") or "")
-        )
-        entries.append(
-            {
-                "schema_version": 1,
-                "timestamp": event.get("captured_at") or utc_now(),
-                "source": event.get("hook_event_name") or "unknown",
-                "resource_type": event.get("tool_name") or event.get("hook_event_name") or "unknown",
-                "allocated_to": labels,
-                "related_goal": related_goal,
-                "supports_mainline": supports_mainline,
-                "confidence": round(confidence, 2),
-                "evidence": [f"trace:{event.get('event_id', 'unknown')}"],
-                "ambiguity": ambiguity,
-                "review_state": "unreviewed",
+        result = classify(text, accepted_goals, str(event.get("hook_event_name") or ""))
+        event_id = str(event.get("event_id") or "unknown")
+        auto_labels = result["labels"]
+        review_state = "unreviewed"
+        allocated_to = auto_labels
+        correction = corrections.get(event_id)
+        if correction:
+            allocated_to = correction["labels"]
+            review_state = "corrected"
+        for signal in result["goal_signals"]:
+            reinforcement[signal.get("goal_id") or signal.get("statement") or ""] += 1
+        entry = {
+            "schema_version": 1,
+            "timestamp": event.get("captured_at") or utc_now(),
+            "event_id": event_id,
+            "source": event.get("hook_event_name") or "unknown",
+            "resource_type": event.get("tool_name") or event.get("hook_event_name") or "unknown",
+            "allocated_to": allocated_to,
+            "related_goal": result["related_goal"],
+            "supports_mainline": result["supports_mainline"],
+            "confidence": round(result["confidence"], 2),
+            "ambiguity": result["ambiguity"],
+            "review_state": review_state,
+            # The receipt is the evidence trail: why this label, from what.
+            "receipt": {
+                "event_id": event_id,
+                "source_event": f"{event.get('hook_event_name') or 'unknown'}/{event.get('tool_name') or event.get('hook_event_name') or 'unknown'}",
+                "reason": result["reason"],
+                "matched_patterns": result["matched_patterns"],
+                "goal_signals": result["goal_signals"],
+                "auto_labels": auto_labels,
+                "auto_confidence": round(result["confidence"], 2),
+            },
+        }
+        if correction:
+            entry["correction"] = {
+                "labels": correction["labels"],
+                "note": correction.get("note", ""),
+                "recorded_at": correction.get("recorded_at"),
             }
-        )
+        entries.append(entry)
     counts = Counter(label for entry in entries for label in entry["allocated_to"])
+    # Coverage / blind-spot accounting: be loud about what we cannot see.
+    trace_event_count = len(events) - len(git_events)
+    git_commit_count = len(git_events)
+    noise_entries = sum(1 for entry in entries if entry["allocated_to"] == ["noise"])
+    corrected_entries = sum(1 for entry in entries if entry["review_state"] == "corrected")
+    low_signal_entries = sum(
+        1
+        for entry in entries
+        if entry["review_state"] != "corrected"
+        and not entry["receipt"]["matched_patterns"]
+        and not entry["receipt"]["goal_signals"]
+        and entry["receipt"]["reason"] != "lifecycle_event"
+    )
+    low_confidence_entries = sum(
+        1 for entry in entries if entry["review_state"] != "corrected" and entry["confidence"] < 0.5
+    )
+    coverage = {
+        "trace_events": trace_event_count,
+        "git_commits": git_commit_count,
+        "noise_entries": noise_entries,
+        "low_signal_entries": low_signal_entries,
+        "low_confidence_entries": low_confidence_entries,
+        "corrected_entries": corrected_entries,
+        "not_captured": [
+            "Decisions or reasoning that happened only in chat, not as tool calls.",
+            "Work done outside Claude Code or outside this repository.",
+            "The intent, effort, or impact behind any single event.",
+        ],
+    }
+    if git_commit_count and trace_event_count == 0:
+        coverage["note"] = (
+            "Commits exist in this window but no Claude Code traces were captured; "
+            "that work happened outside this tool's view."
+        )
     ledger = {
         "schema_version": 1,
         "generated_at": utc_now(),
@@ -519,6 +807,8 @@ def build_ledger(root: Path, since_value: str) -> dict[str, Any]:
         "rubric": list(RUBRIC.keys()),
         "entry_count": len(entries),
         "allocation_counts": dict(counts),
+        "coverage": coverage,
+        "goal_reinforcement": {key: value for key, value in reinforcement.items() if key},
         "entries": entries,
     }
     output = sm_dir(root) / "allocations" / "allocation-ledger.json"
@@ -532,31 +822,67 @@ def render_review(root: Path, since_value: str) -> Path:
     base = sm_dir(root)
     hypothesis = load_json(base / "problems" / "mainline-hypothesis.json", {})
     goals = load_json(base / "goals" / "accepted-goals.json", {"goals": []})
+    goal_events = list_goal_events(root)
     counts = Counter(ledger.get("allocation_counts") or {})
     total = sum(counts.values()) or 1
+    coverage = ledger.get("coverage") or {}
+    reinforcement = ledger.get("goal_reinforcement") or {}
+    accepted = goals.get("goals") if isinstance(goals, dict) else []
+
     lines = [
-        "# StillMirror Project Drift Review",
+        "# StillMirror Project Alignment Review",
         "",
         f"- Generated: {ledger['generated_at']}",
         f"- Window start: {ledger['since']}",
         "",
-        "## Mainline Hypothesis",
+        "This review joins two spines: the goals you accepted (what you authorized)",
+        "and the allocation evidence (what the agent did). The labels are a rough",
+        "prompt for your review, not a measurement or a verdict.",
         "",
-        f"- Statement: {hypothesis.get('statement') or '(unreviewed)'}",
-        f"- Confidence: {hypothesis.get('confidence', 0)}",
-        f"- Alternatives: {', '.join(hypothesis.get('alternatives') or []) or '(none recorded)'}",
+        "## Coverage & Blind Spots",
         "",
-        "## Accepted Goals",
+        "StillMirror only sees Claude Code hook events and git commits in this",
+        "repository. Read everything below as partial evidence.",
         "",
+        f"- Trace events captured: {coverage.get('trace_events', 0)}",
+        f"- Git commits in window: {coverage.get('git_commits', 0)}",
+        f"- Lifecycle events set aside as `noise`: {coverage.get('noise_entries', 0)}",
+        f"- Entries with no rubric or goal signal (could not classify): {coverage.get('low_signal_entries', 0)}",
+        f"- Entries below 0.5 confidence: {coverage.get('low_confidence_entries', 0)}",
+        f"- Human-corrected entries: {coverage.get('corrected_entries', 0)}",
+        "",
+        "Not captured by StillMirror:",
     ]
-    accepted = goals.get("goals") if isinstance(goals, dict) else []
+    for item in coverage.get("not_captured") or []:
+        lines.append(f"- {item}")
+    if coverage.get("note"):
+        lines.extend(["", f"> {coverage['note']}"])
+
+    lines.extend(
+        [
+            "",
+            "## Mainline Hypothesis",
+            "",
+            f"- Statement: {hypothesis.get('statement') or '(unreviewed)'}",
+            f"- Confidence: {hypothesis.get('confidence', 0)}",
+            f"- Alternatives: {', '.join(hypothesis.get('alternatives') or []) or '(none recorded)'}",
+            "",
+            "## Goal Provenance",
+            "",
+        ]
+    )
     if accepted:
         for goal in accepted:
-            lines.append(f"- {goal.get('statement') or goal.get('goal')}")
+            state = "retired" if goal.get("retired") else ("superseded" if goal.get("superseded") else "active")
+            hits = reinforcement.get(str(goal.get("id") or ""), 0)
+            lines.append(
+                f"- {goal.get('statement') or goal.get('goal')} "
+                f"— {state}, reinforced by {hits} allocation(s)"
+            )
     else:
         lines.extend(
             [
-                "- (none recorded yet)",
+                "- (no accepted goals recorded yet)",
                 "",
                 "> No accepted goals are recorded, so no allocation can be matched to",
                 "> `core_problem`. Add goals first to enable core-problem detection:",
@@ -566,6 +892,11 @@ def render_review(root: Path, since_value: str) -> Path:
                 "> ```",
             ]
         )
+    if goal_events:
+        lines.extend(["", "Recent goal events:"])
+        for event in goal_events[-5:]:
+            lines.append(f"- {event.get('recorded_at', '')[:10]} `{event.get('type')}` — {event.get('statement')}")
+
     lines.extend(
         [
             "",
@@ -613,6 +944,13 @@ def render_review(root: Path, since_value: str) -> Path:
             "- misclassification",
             "- insufficient_evidence",
             "",
+            "If a label looks wrong, correct the underlying entry so future reviews",
+            "honor your judgment:",
+            "",
+            "```sh",
+            'stillmirror-review correct --event <event_id> --label <rubric_label>',
+            "```",
+            "",
             "## Boundaries",
             "",
             "- No drift score is produced.",
@@ -621,7 +959,7 @@ def render_review(root: Path, since_value: str) -> Path:
             "",
         ]
     )
-    output = base / "reviews" / f"{utc_now()[:10]}-project-drift-review.md"
+    output = base / "reviews" / f"{utc_now()[:10]}-project-alignment-review.md"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("\n".join(lines), encoding="utf-8")
     return output
@@ -643,6 +981,27 @@ def main() -> int:
     goals_add.add_argument("--scope", default="project")
     goals_add.add_argument("--review-state", default="accepted", choices=["reviewed", "accepted"])
     goals_sub.add_parser("list")
+    goals_sub.add_parser("events")
+    goals_retire = goals_sub.add_parser("retire")
+    goals_retire.add_argument("goal")
+    goals_retire.add_argument("--note", default="")
+    goals_replace = goals_sub.add_parser("replace")
+    goals_replace.add_argument("goal")
+    goals_replace.add_argument("--with", dest="new_statement", required=True)
+    goals_replace.add_argument("--source", default="user")
+    goals_replace.add_argument("--scope", default="project")
+    goals_replace.add_argument("--review-state", default="accepted", choices=["reviewed", "accepted"])
+    goals_replace.add_argument("--note", default="")
+    problem = sub.add_parser("problem")
+    problem_sub = problem.add_subparsers(dest="problem_command")
+    problem_set = problem_sub.add_parser("set")
+    problem_set.add_argument("statement")
+    problem_set.add_argument("--confidence", type=float, default=0.5)
+    problem_set.add_argument("--alternative", action="append", default=[], dest="alternatives")
+    correct = sub.add_parser("correct")
+    correct.add_argument("--event", required=True)
+    correct.add_argument("--label", action="append", required=True, choices=list(RUBRIC.keys()))
+    correct.add_argument("--note", default="")
     alignment = sub.add_parser("alignment")
     alignment_sub = alignment.add_subparsers(dest="alignment_command")
     alignment_record = alignment_sub.add_parser("record")
@@ -666,9 +1025,27 @@ def main() -> int:
             print(json.dumps({"goal": goal, "output": str(accepted_goals_path(root))}, ensure_ascii=False, indent=2))
         elif args.goals_command == "list":
             print(json.dumps(list_goals(root), ensure_ascii=False, indent=2))
+        elif args.goals_command == "events":
+            print(json.dumps({"events": list_goal_events(root)}, ensure_ascii=False, indent=2))
+        elif args.goals_command == "retire":
+            goal = retire_goal(root, args.goal, args.note)
+            print(json.dumps({"retired": goal, "output": str(goal_events_path(root))}, ensure_ascii=False, indent=2))
+        elif args.goals_command == "replace":
+            result = replace_goal(root, args.goal, args.new_statement, args.source, args.scope, args.review_state, args.note)
+            print(json.dumps({"replaced": result, "output": str(goal_events_path(root))}, ensure_ascii=False, indent=2))
         else:
             goals.print_help()
             return 2
+    elif args.command == "problem":
+        if args.problem_command == "set":
+            doc = set_problem(root, args.statement, args.confidence, args.alternatives)
+            print(json.dumps({"problem": doc, "output": str(sm_dir(root) / "problems" / "mainline-hypothesis.json")}, ensure_ascii=False, indent=2))
+        else:
+            problem.print_help()
+            return 2
+    elif args.command == "correct":
+        record = record_correction(root, args.event, args.label, args.note)
+        print(json.dumps({"correction": record, "output": str(corrections_path(root))}, ensure_ascii=False, indent=2))
     elif args.command == "alignment":
         if args.alignment_command == "record":
             record = record_alignment(root, args.label, args.note, args.review_file)

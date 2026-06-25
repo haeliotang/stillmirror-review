@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "stillmirror",
-  "description": "Project Drift Review plugins for agentic work",
+  "description": "Review-layer plugins for agentic work",
   "owner": {
     "name": "Haelio Tang",
     "email": "stillmirror@haelio.cc"
@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "stillmirror-review",
-      "description": "Project Drift Review for Claude Code. Makes allocation trails visible for user alignment review.",
+      "description": "The review layer for agentic work. Joins accepted-goal provenance with allocation evidence for user alignment review.",
       "author": {
         "name": "Haelio Tang",
         "email": "stillmirror@haelio.cc"
