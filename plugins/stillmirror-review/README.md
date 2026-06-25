@@ -55,9 +55,19 @@ plugins/stillmirror-review/bin/stillmirror-review correct --event <event_id> --l
 plugins/stillmirror-review/bin/stillmirror-review review-due
 plugins/stillmirror-review/bin/stillmirror-review review --since 30d
 plugins/stillmirror-review/bin/stillmirror-review review --base origin/main
+plugins/stillmirror-review/bin/stillmirror-review maintainer-review --since 90d
 plugins/stillmirror-review/bin/stillmirror-review alignment record --label necessary_support
 plugins/stillmirror-review/bin/stillmirror-review alignment list
 ```
+
+## Maintainer review (the wedge)
+
+`maintainer-review` is a parallel, capture-free, git-only review for open-source
+maintainers — *advancing the core, or drowning in maintenance?* It needs no
+install and runs on any cloned repo; its output is a committable **badge** (the
+badge is the distribution), plus a report and a machine sidecar with
+cross-project `canonical_counts`. Evidence, not verdict; neutral badge color. See
+[docs/MAINTAINER-REVIEW.md](https://github.com/haeliotang/stillmirror-review/blob/main/docs/MAINTAINER-REVIEW.md).
 
 ## Triggers (review when it matters)
 

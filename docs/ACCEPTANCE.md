@@ -34,6 +34,11 @@ Functional gates:
   surfaces exceptions with `event_id`s, and carries the "surfaced ≠ judged"
   disclaimer (no agent ranking, no trends).
 - `alignment record/list` writes user review records.
+- `maintainer-review` (the wedge) classifies commits git-only into a maintainer
+  profile mapped to canonical classes, and writes a report, a neutral-color
+  shields badge JSON, and a sidecar with `maintainer_counts` and
+  `canonical_counts`; its coverage names the PR/issue/triage blind spot and it
+  produces no score or verdict.
 - redacted sample contains no private paths, raw prompts, or transcript payloads.
 
 Boundary:

@@ -333,6 +333,52 @@ class StillMirrorPluginTests(unittest.TestCase):
             ledger = self.load_ledger(project)
             self.assertEqual(ledger["entry_count"], 2)  # only the two feature commits
 
+    def test_maintainer_review_wedge(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+
+            def git(*args: str) -> None:
+                subprocess.run(["git", "-C", str(project), *args], check=True, capture_output=True, text=True)
+
+            git("init")
+            git("config", "user.email", "t@t.co")
+            git("config", "user.name", "t")
+            subjects = [
+                "feat: add pipeline",
+                "fix: crash on empty input",
+                "chore: bump deps",
+                "docs: readme",
+                "release: v1.2.0",
+                "address review feedback",  # must NOT be read as a feature ("add" in "address")
+            ]
+            for subject in subjects:
+                git("commit", "--allow-empty", "-m", subject)
+            result = json.loads(self.run_script(project, "maintainer-review", "--since", "365d").stdout)
+            self.assertEqual(result["commits"], 6)
+
+            sidecar = json.loads(Path(result["sidecar"]).read_text())
+            labels = {entry["subject"]: entry["label"] for entry in sidecar["entries"]}
+            self.assertEqual(labels["feat: add pipeline"], "feature")
+            self.assertEqual(labels["fix: crash on empty input"], "bug_fixing")
+            self.assertEqual(labels["chore: bump deps"], "infra")
+            self.assertEqual(labels["docs: readme"], "docs")
+            self.assertEqual(labels["release: v1.2.0"], "release_packaging")
+            self.assertEqual(labels["address review feedback"], "triage_responding")
+            # Canonical sidecar makes the output cross-project aggregatable.
+            self.assertEqual(sidecar["canonical_counts"].get("core_problem"), 1)
+            self.assertIn("maintainer_counts", sidecar)
+
+            badge = json.loads(Path(result["badge"]).read_text())
+            self.assertEqual(badge["schemaVersion"], 1)
+            self.assertEqual(badge["color"], "blue")  # neutral by design, never red-for-bad
+            self.assertTrue(badge["message"])
+
+            report = Path(result["report"]).read_text()
+            self.assertIn("Evidence, not verdict.", report)
+            self.assertIn("pull-request", report)  # coverage names the blind spot
+            self.assertIn("triage_responding", report)
+            self.assertNotIn("drowning", report.casefold())  # no verdict language
+
 
 if __name__ == "__main__":
     unittest.main()

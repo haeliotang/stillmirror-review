@@ -37,7 +37,7 @@ claude plugin details stillmirror-review
 Expected shape:
 
 ```text
-stillmirror-review 0.3.0
+stillmirror-review 0.3.1
   The review layer for agentic work. Joins accepted-goal provenance with
   allocation evidence for user alignment review.
   Source: stillmirror-review@stillmirror
@@ -115,8 +115,24 @@ plugins/stillmirror-review/bin/stillmirror-review correct --event <event_id> --l
 plugins/stillmirror-review/bin/stillmirror-review review-due
 plugins/stillmirror-review/bin/stillmirror-review review --since 30d
 plugins/stillmirror-review/bin/stillmirror-review review --base origin/main
+plugins/stillmirror-review/bin/stillmirror-review maintainer-review --since 90d
 plugins/stillmirror-review/bin/stillmirror-review alignment record --label necessary_support
 ```
+
+## Maintainer review (the wedge)
+
+A capture-free, git-only review for open-source maintainers — *is this project
+advancing its core, or drowning in maintenance?* It needs no install and runs on
+any cloned repo, and its output is a **badge** you commit to your README (the
+badge is the distribution):
+
+```sh
+plugins/stillmirror-review/bin/stillmirror-review maintainer-review --since 90d
+```
+
+It writes a report, a shields.io badge JSON, and a machine sidecar (with
+cross-project `canonical_counts`). Evidence, not verdict; the badge color is
+neutral by design. See [docs/MAINTAINER-REVIEW.md](docs/MAINTAINER-REVIEW.md).
 
 ## Triggers
 

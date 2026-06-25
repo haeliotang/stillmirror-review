@@ -14,6 +14,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 
 RUBRIC: dict[str, dict[str, Any]] = {
@@ -117,6 +118,60 @@ LIFECYCLE_EVENTS = {
     "SubagentStop",
     "Notification",
     "PreCompact",
+}
+
+
+# Wedge: a maintainer-facing profile that speaks the maintainer's vocabulary on
+# the surface, while each label maps to a canonical RUBRIC class underneath, so
+# the same output is both human-glanceable and cross-project aggregatable.
+MAINTAINER_PROFILE: dict[str, dict[str, Any]] = {
+    "feature": {
+        "patterns": ["feat", "feature", "features", "add", "adds", "added", "implement", "implements", "support", "supports", "introduce", "new"],
+        "canonical": "core_problem",
+        "display": "feature",
+    },
+    "bug_fixing": {
+        "patterns": ["fix", "fixes", "fixed", "bug", "bugs", "patch", "hotfix", "regression", "crash", "broken"],
+        "canonical": "maintenance_debugging",
+        "display": "fixes",
+    },
+    "release_packaging": {
+        "patterns": ["release", "released", "version", "bump", "bumps", "changelog", "publish", "tag", "package", "packaging"],
+        "canonical": "packaging_distribution",
+        "display": "release",
+    },
+    "infra": {
+        "patterns": ["build", "workflow", "docker", "deps", "dependency", "dependencies", "lint", "chore", "config", "cleanup"],
+        "canonical": "support_infrastructure",
+        "display": "infra",
+    },
+    "docs": {
+        "patterns": ["docs", "doc", "readme", "documentation", "comment", "comments"],
+        "canonical": "packaging_distribution",
+        "display": "docs",
+    },
+    "triage_responding": {
+        "patterns": ["respond", "review", "reviews", "address", "addresses", "feedback", "revert", "merge", "triage", "close", "closes"],
+        "canonical": "evaluation",
+        "display": "triage",
+    },
+    "other": {"patterns": [], "canonical": "exploration", "display": "other"},
+}
+
+
+# Conventional-commit type -> maintainer label (takes priority over keywords).
+CONVENTIONAL_COMMIT = {
+    "feat": "feature",
+    "fix": "bug_fixing",
+    "perf": "bug_fixing",
+    "refactor": "bug_fixing",
+    "docs": "docs",
+    "test": "infra",
+    "ci": "infra",
+    "build": "infra",
+    "chore": "infra",
+    "style": "infra",
+    "revert": "triage_responding",
 }
 
 
@@ -528,6 +583,16 @@ def token_match(pattern: str, text: str) -> bool:
     inside ``prefix``).
     """
     return re.search(r"\b" + re.escape(pattern), text) is not None
+
+
+def word_match(pattern: str, text: str) -> bool:
+    """Whole-word match (both boundaries) for short commit-subject keywords.
+
+    Commit subjects are short, so precision matters: ``add`` must not match
+    ``address`` and ``doc`` must not match ``docker``. Inflections are listed
+    explicitly in MAINTAINER_PROFILE instead of relying on prefix matching.
+    """
+    return re.search(r"\b" + re.escape(pattern) + r"\b", text) is not None
 
 
 def classify(
@@ -1153,6 +1218,158 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
     return output
 
 
+def classify_commit(subject: str) -> dict[str, Any]:
+    """Classify a commit subject into a maintainer label + its canonical class.
+
+    Conventional-commit prefix wins; else whole-word keyword match; else other.
+    """
+    text = subject.casefold()
+    match = re.match(r"\s*([a-z]+)(\([^)]*\))?!?:", text)
+    if match and match.group(1) in CONVENTIONAL_COMMIT:
+        label = CONVENTIONAL_COMMIT[match.group(1)]
+        return {"label": label, "canonical": MAINTAINER_PROFILE[label]["canonical"], "reason": f"conventional:{match.group(1)}"}
+    for label, spec in MAINTAINER_PROFILE.items():
+        if label == "other":
+            continue
+        if any(word_match(pattern, text) for pattern in spec["patterns"]):
+            return {"label": label, "canonical": spec["canonical"], "reason": "keyword"}
+    return {"label": "other", "canonical": MAINTAINER_PROFILE["other"]["canonical"], "reason": "no_match"}
+
+
+def shields_badge_url(label: str, message: str, color: str) -> str:
+    def esc(part: str) -> str:
+        out = part.replace("-", "--").replace("_", "__").replace(" ", "_")
+        return quote(out, safe="_")
+    return f"https://img.shields.io/badge/{esc(label)}-{esc(message)}-{color}"
+
+
+def maintainer_review(root: Path, since_value: str, base: str | None = None, out_dir: str = "") -> dict[str, Any]:
+    """Capture-free maintainer review of a repo's recent commits (the wedge).
+
+    Reuses the canonical RUBRIC underneath via MAINTAINER_PROFILE, so the human
+    badge/report and a machine-aggregatable sidecar come from one classifier.
+    """
+    if base:
+        resolved = base_since_value(root, base)
+        since = parse_since(resolved) if resolved else parse_since(since_value)
+    else:
+        since = parse_since(since_value)
+    commits = git_entries(root, since, base or "")
+    classified = []
+    maintainer_counts: Counter[str] = Counter()
+    canonical_counts: Counter[str] = Counter()
+    for commit in commits:
+        summary = commit.get("tool_input_summary") or {}
+        description = summary.get("description") or {}
+        subject = str(description.get("preview") or "")
+        result = classify_commit(subject)
+        maintainer_counts[result["label"]] += 1
+        canonical_counts[result["canonical"]] += 1
+        classified.append(
+            {
+                "commit": str(summary.get("commit") or commit.get("event_id") or "")[:12],
+                "subject": subject,
+                "label": result["label"],
+                "canonical": result["canonical"],
+                "reason": result["reason"],
+            }
+        )
+    total = sum(maintainer_counts.values()) or 1
+    ordered = [(label, maintainer_counts.get(label, 0)) for label in MAINTAINER_PROFILE]
+    top = [(label, count) for label, count in sorted(ordered, key=lambda kv: kv[1], reverse=True) if count][:2]
+    if top:
+        message = " · ".join(f"{MAINTAINER_PROFILE[label]['display']} {round(count * 100 / total)}%" for label, count in top)
+    else:
+        message = "no commits in window"
+    # Neutral, fixed color: a badge must inform, never grade.
+    badge = {"schemaVersion": 1, "label": "work", "message": message, "color": "blue"}
+    badge_markdown = f"![StillMirror]({shields_badge_url('work', message, 'blue')})"
+
+    target = Path(out_dir).expanduser() if out_dir else (sm_dir(root) / "reviews")
+    target.mkdir(parents=True, exist_ok=True)
+    report_path = target / f"{utc_now()[:10]}-maintainer-review.md"
+    badge_path = target / "maintainer-badge.json"
+    sidecar_path = target / "maintainer-review.json"
+
+    lines = [
+        "# StillMirror Maintainer Review",
+        "",
+        f"- Generated: {utc_now()}",
+        f"- Window start: {since.isoformat().replace('+00:00', 'Z')}",
+        f"- Commits analysed: {len(commits)}",
+        "",
+        "Evidence for the maintainer's own review, not a verdict. It reads only git",
+        "commit subjects.",
+        "",
+        "## Coverage & Blind Spots",
+        "",
+        "- Reads commit subjects only — it does NOT see pull-request or issue triage,",
+        "  review discussion, or the effort/impact behind any commit.",
+        "- `triage_responding` is undercounted: most of it lives in PR/issue threads",
+        "  this git-only view cannot see.",
+        "",
+        "## Effort distribution",
+        "",
+    ]
+    for label in MAINTAINER_PROFILE:
+        count = maintainer_counts.get(label, 0)
+        pct = round(count * 100 / total)
+        lines.append(f"- `{label}`: {count} ({pct}%)")
+    feature_pct = round(maintainer_counts.get("feature", 0) * 100 / total)
+    upkeep = sum(maintainer_counts.get(label, 0) for label in ("bug_fixing", "infra", "release_packaging", "docs"))
+    upkeep_pct = round(upkeep * 100 / total)
+    lines.extend(
+        [
+            "",
+            f"For your own judgement: feature {feature_pct}% · upkeep {upkeep_pct}% "
+            "(triage is undercounted — see Coverage).",
+            "",
+            "## Badge",
+            "",
+            "Paste into your README (regenerate periodically):",
+            "",
+            f"`{badge_markdown}`",
+            "",
+            "## Boundaries",
+            "",
+            "- No score or grade is produced; the badge color is neutral by design.",
+            "- \"Maintenance-heavy\" would be an observation for your review, not a judgment.",
+            "- Evidence, not verdict.",
+            "",
+        ]
+    )
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+    write_json(badge_path, badge)
+    write_json(
+        sidecar_path,
+        {
+            "schema_version": 1,
+            "generated_at": utc_now(),
+            "since": since.isoformat().replace("+00:00", "Z"),
+            "commits": len(commits),
+            "maintainer_counts": dict(maintainer_counts),
+            "canonical_counts": dict(canonical_counts),
+            "coverage": {
+                "source": "git commit subjects only",
+                "not_captured": [
+                    "Pull-request and issue triage / responding.",
+                    "Review discussion and the effort or impact behind a commit.",
+                ],
+            },
+            "entries": classified,
+        },
+    )
+    return {
+        "commits": len(commits),
+        "maintainer_counts": dict(maintainer_counts),
+        "canonical_counts": dict(canonical_counts),
+        "badge_markdown": badge_markdown,
+        "report": str(report_path),
+        "badge": str(badge_path),
+        "sidecar": str(sidecar_path),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="StillMirror Review local helper")
     sub = parser.add_subparsers(dest="command")
@@ -1166,6 +1383,10 @@ def main() -> int:
     review_due = sub.add_parser("review-due")
     review_due.add_argument("--threshold", type=int, default=None)
     review_due.add_argument("--nudge", action="store_true", help="SessionStart hook mode: emit a quiet line only if opted in and due")
+    maintainer = sub.add_parser("maintainer-review")
+    maintainer.add_argument("--since", default="90d")
+    maintainer.add_argument("--base", default="", help="scope to commits since merge-base(<ref>, HEAD)")
+    maintainer.add_argument("--out-dir", default="", help="where to write report + badge (default .stillmirror/reviews; point at a committed dir to publish the badge)")
     goals = sub.add_parser("goals")
     goals_sub = goals.add_subparsers(dest="goals_command")
     goals_add = goals_sub.add_parser("add")
@@ -1217,6 +1438,9 @@ def main() -> int:
         if args.nudge:
             return run_nudge(threshold)
         print(json.dumps(compute_review_due(root, threshold), ensure_ascii=False, indent=2))
+    elif args.command == "maintainer-review":
+        result = maintainer_review(root, args.since, args.base or None, args.out_dir)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "goals":
         if args.goals_command == "add":
             goal = add_goal(root, args.statement, args.source, args.scope, args.review_state)

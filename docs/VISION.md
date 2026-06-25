@@ -99,8 +99,12 @@ honest:
 - **v0.4 — Evidence breadth**: commit / diff / PR / issue ingestion;
   session-to-session comparison and deltas (kept out of v0.3 to avoid trend /
   verdict creep).
-- **Parallel — Open-source Maintainer Review (wedge)**: no capture required;
-  start anytime, decoupled from the spine.
+- **Parallel — Open-source Maintainer Review (wedge)** *(v0 shipped)*: the
+  `maintainer-review` command — capture-free, git-only, landing as a committable
+  **badge + report** with a canonical sidecar. Distribution is designed in (the
+  badge is the ad). See [MAINTAINER-REVIEW.md](MAINTAINER-REVIEW.md). *Deferred:*
+  a GitHub Action wrapper, PR/issue enrichment (a flood to be triaged, not
+  dumped), and an **anonymized** "State of OSS Maintenance" aggregate report.
 - **v0.5 — Claude Desktop MCPB review adapter**: read `.stillmirror/` for
   reflective, non-coding review sessions.
 - **v0.6 — Multi-agent budget *view***: a view on the same spine, not a pillar.
