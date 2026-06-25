@@ -18,6 +18,12 @@ claude plugin install stillmirror-review@stillmirror --scope local
 claude plugin details stillmirror-review
 ```
 
+> Note: `install` and `update` need the marketplace-qualified name
+> (`stillmirror-review@stillmirror`). The bare `stillmirror-review` resolves for
+> `details` but `update` reports "Plugin not found". To upgrade an existing
+> install: `claude plugin marketplace update stillmirror` then
+> `claude plugin update stillmirror-review@stillmirror`.
+
 ## Tag
 
 ```sh
