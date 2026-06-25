@@ -26,6 +26,61 @@ claude plugin marketplace add haeliotang/stillmirror-review --scope user
 claude plugin install stillmirror-review@stillmirror --scope user
 ```
 
+Verify the installed plugin:
+
+```sh
+claude plugin details stillmirror-review
+```
+
+Expected shape:
+
+```text
+stillmirror-review 0.1.0
+  Project Drift Review for agentic work. Makes allocation trails visible for
+  user review.
+  Source: stillmirror-review@stillmirror
+
+Component inventory
+  Skills (4)  goals, init, ledger, review
+  Hooks (7)  SessionStart, UserPromptSubmit, PostToolUse, TaskCreated,
+             TaskCompleted, Stop, SessionEnd
+  MCP servers (0)
+```
+
+Then run a project-level smoke test in a target repository:
+
+```sh
+cd /path/to/your/project
+claude
+```
+
+Inside Claude Code, invoke the skills:
+
+```text
+/stillmirror-review:init
+/stillmirror-review:goals
+/stillmirror-review:ledger
+/stillmirror-review:review
+```
+
+After the smoke test, the target repository should contain local review state:
+
+```text
+.stillmirror/goals/accepted-goals.json
+.stillmirror/allocations/allocation-ledger.json
+.stillmirror/reviews/*-project-drift-review.md
+```
+
+Make sure `.stillmirror/` is ignored by the target repository:
+
+```sh
+grep -n "^\\.stillmirror/" .gitignore
+```
+
+If you want to inspect the generated local state from the shell, use normal
+filesystem checks. Do not depend on Claude's internal plugin cache paths; they
+are implementation details and can change.
+
 For local testing from a checkout:
 
 ```sh
