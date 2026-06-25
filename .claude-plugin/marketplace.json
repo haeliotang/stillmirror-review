@@ -3,14 +3,16 @@
   "name": "stillmirror",
   "description": "Project Drift Review plugins for agentic work",
   "owner": {
-    "name": "StillMirror"
+    "name": "Haelio Tang",
+    "email": "stillmirror@haelio.cc"
   },
   "plugins": [
     {
       "name": "stillmirror-review",
       "description": "Project Drift Review for Claude Code. Makes allocation trails visible for user alignment review.",
       "author": {
-        "name": "StillMirror"
+        "name": "Haelio Tang",
+        "email": "stillmirror@haelio.cc"
       },
       "source": "./plugins/stillmirror-review",
       "category": "productivity",
