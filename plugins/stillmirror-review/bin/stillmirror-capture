@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""Capture sanitized Claude Code hook events into .stillmirror traces."""
+
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+
+MAX_PREVIEW = 240
+
+
+def now_iso() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+
+
+def safe_rel(path: str, cwd: Path) -> str:
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = cwd / candidate
+    try:
+        return str(candidate.resolve().relative_to(cwd.resolve()))
+    except Exception:
+        return candidate.name
+
+
+def compact_text(value: Any, include_preview: bool = False) -> dict[str, Any]:
+    text = "" if value is None else str(value)
+    result: dict[str, Any] = {"sha256": sha(text), "chars": len(text)}
+    if include_preview and text:
+        result["preview"] = text[:MAX_PREVIEW]
+    return result
+
+
+def summarize_tool_input(tool_input: Any, cwd: Path) -> dict[str, Any]:
+    if not isinstance(tool_input, dict):
+        return {"kind": type(tool_input).__name__}
+    summary: dict[str, Any] = {"keys": sorted(str(key) for key in tool_input.keys())}
+    file_keys = ["file_path", "path", "notebook_path"]
+    paths = []
+    for key in file_keys:
+        value = tool_input.get(key)
+        if isinstance(value, str) and value:
+            paths.append(safe_rel(value, cwd))
+    if paths:
+        summary["paths"] = paths
+    command = tool_input.get("command")
+    if isinstance(command, str) and command:
+        first = command.strip().split()
+        summary["command"] = {
+            "sha256": sha(command),
+            "chars": len(command),
+            "first_token": first[0] if first else "",
+        }
+    query = tool_input.get("query") or tool_input.get("pattern")
+    if isinstance(query, str) and query:
+        summary["query"] = compact_text(query, include_preview=False)
+    description = tool_input.get("description")
+    if isinstance(description, str) and description:
+        summary["description"] = compact_text(description, include_preview=True)
+    return summary
+
+
+def normalize_event(payload: dict[str, Any]) -> dict[str, Any]:
+    cwd = Path(str(payload.get("cwd") or os.getcwd())).expanduser().resolve()
+    event_name = str(
+        payload.get("hook_event_name")
+        or payload.get("event")
+        or payload.get("type")
+        or "unknown"
+    )
+    include_prompt = os.environ.get("STILLMIRROR_CAPTURE_PROMPT_TEXT") == "1"
+    prompt = payload.get("prompt") or payload.get("user_prompt")
+    tool_input = payload.get("tool_input") or payload.get("input")
+    normalized: dict[str, Any] = {
+        "schema_version": 1,
+        "captured_at": now_iso(),
+        "hook_event_name": event_name,
+        "cwd": str(cwd),
+        "session_id_hash": sha(str(payload.get("session_id") or ""))[:16],
+        "transcript_path_hash": sha(str(payload.get("transcript_path") or ""))[:16],
+    }
+    if prompt is not None:
+        normalized["prompt"] = compact_text(prompt, include_preview=include_prompt)
+    if payload.get("tool_name"):
+        normalized["tool_name"] = str(payload["tool_name"])
+    if tool_input is not None:
+        normalized["tool_input_summary"] = summarize_tool_input(tool_input, cwd)
+    if payload.get("stop_hook_active") is not None:
+        normalized["stop_hook_active"] = bool(payload.get("stop_hook_active"))
+    event_id_source = json.dumps(normalized, sort_keys=True, ensure_ascii=False)
+    normalized["event_id"] = sha(event_id_source)[:20]
+    return normalized
+
+
+def main() -> int:
+    raw = sys.stdin.read()
+    try:
+        payload = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        payload = {"hook_event_name": "unparseable", "raw": compact_text(raw)}
+    if not isinstance(payload, dict):
+        payload = {"hook_event_name": "non_object_payload", "payload": compact_text(payload)}
+    event = normalize_event(payload)
+    root = Path(event["cwd"]) / ".stillmirror" / "traces" / "claude-code"
+    root.mkdir(parents=True, exist_ok=True)
+    date = event["captured_at"][:10]
+    path = root / f"{date}.jsonl"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+    # Hooks should be non-intrusive and should not inject visible output.
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

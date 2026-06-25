@@ -1,0 +1,28 @@
+# Local StillMirror state
+.stillmirror/
+local/
+data/
+*.local.*
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Node / build
+node_modules/
+dist/
+build/
+
+# Secrets
+.env
+.env.*
+*.key
+*.pem
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

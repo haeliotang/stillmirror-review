@@ -1,0 +1,626 @@
+#!/usr/bin/env python3
+"""StillMirror Review local helper for allocation-ledger prototypes."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+import re
+import subprocess
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+
+RUBRIC: dict[str, dict[str, Any]] = {
+    "core_problem": {
+        "description": "Directly advances the current MainlineHypothesis or accepted goals.",
+        "patterns": [],
+    },
+    "support_infrastructure": {
+        "description": "Infrastructure, runtime, hooks, adapters, capture, storage, CLI, or data pipelines needed to support the project.",
+        "patterns": [
+            "hook",
+            "runtime",
+            "adapter",
+            "capture",
+            "trace",
+            "storage",
+            "store",
+            "cli",
+            "server",
+            "plugin",
+            "mcp",
+            "pipeline",
+            "schema",
+        ],
+    },
+    "evaluation": {
+        "description": "Tests, benchmarks, validation, review protocols, audits, metrics, or counterevidence scans.",
+        "patterns": [
+            "test",
+            "pytest",
+            "unittest",
+            "benchmark",
+            "validate",
+            "validation",
+            "audit",
+            "review",
+            "metric",
+            "counterevidence",
+            "robustness",
+            "acceptance",
+        ],
+    },
+    "packaging_distribution": {
+        "description": "README, docs, release, installation, examples, publishing, marketplace, or open-source distribution.",
+        "patterns": [
+            "readme",
+            "docs",
+            "documentation",
+            "prd",
+            "acceptance",
+            "protocol",
+            "release",
+            "install",
+            "package",
+            "marketplace",
+            "publish",
+            "distribution",
+        ],
+    },
+    "maintenance_debugging": {
+        "description": "Bug fixes, dependency issues, cleanup, compatibility, errors, traces, or debugging.",
+        "patterns": [
+            "fix",
+            "bug",
+            "debug",
+            "error",
+            "traceback",
+            "cleanup",
+            "compat",
+            "dependency",
+            "refactor",
+            "lint",
+            "format",
+        ],
+    },
+    "exploration": {
+        "description": "Exploration, prototypes, spikes, research, experiments, or work not yet accepted as mainline.",
+        "patterns": [
+            "explore",
+            "exploration",
+            "prototype",
+            "spike",
+            "research",
+            "experiment",
+            "inquiry",
+            "hypothesis",
+            "candidate",
+        ],
+    },
+}
+
+
+def utc_now() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def project_root() -> Path:
+    return Path(os.getcwd()).resolve()
+
+
+def sm_dir(root: Path) -> Path:
+    return root / ".stillmirror"
+
+
+def write_if_missing(path: Path, value: Any) -> bool:
+    if path.exists():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return True
+
+
+def init_project(root: Path, quiet: bool = False) -> None:
+    base = sm_dir(root)
+    for name in [
+        "traces/claude-code",
+        "runs",
+        "problems",
+        "goals",
+        "allocations",
+        "alignment",
+        "evidence",
+        "snapshots",
+        "reviews",
+    ]:
+        (base / name).mkdir(parents=True, exist_ok=True)
+    write_if_missing(
+        base / "problems" / "mainline-hypothesis.json",
+        {
+            "schema_version": 1,
+            "statement": "",
+            "confidence": 0.0,
+            "alternatives": [],
+            "evidence": [],
+            "review_state": "unreviewed",
+        },
+    )
+    write_if_missing(
+        base / "goals" / "accepted-goals.json",
+        {
+            "schema_version": 1,
+            "goals": [],
+            "boundary": "AcceptedGoal means reviewed or accepted in this project context, not a true value function.",
+        },
+    )
+    write_if_missing(
+        base / "allocations" / "rubric.json",
+        {"schema_version": 1, "rubric": RUBRIC},
+    )
+    readme = base / "README.md"
+    if not readme.exists():
+        readme.write_text(
+            "# .stillmirror\n\n"
+            "Local StillMirror Review state. Do not commit private traces unless explicitly redacted.\n",
+            encoding="utf-8",
+        )
+    if not quiet:
+        print(json.dumps({"initialized": str(base)}, ensure_ascii=False, indent=2))
+
+
+def parse_since(value: str) -> dt.datetime:
+    now = dt.datetime.now(dt.timezone.utc)
+    match = re.fullmatch(r"(\d+)d", value.strip())
+    if match:
+        return now - dt.timedelta(days=int(match.group(1)))
+    parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def parse_time(value: str | None) -> dt.datetime | None:
+    if not value:
+        return None
+    try:
+        return dt.datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(dt.timezone.utc)
+    except ValueError:
+        return None
+
+
+def load_json(path: Path, default: Any) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def write_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def short_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:12]
+
+
+def slug(text: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9]+", "-", text.strip().lower()).strip("-")
+    return cleaned[:48] or "goal"
+
+
+def accepted_goals_path(root: Path) -> Path:
+    return sm_dir(root) / "goals" / "accepted-goals.json"
+
+
+def load_accepted_goals(root: Path) -> dict[str, Any]:
+    init_project(root, quiet=True)
+    doc = load_json(accepted_goals_path(root), {"schema_version": 1, "goals": []})
+    if not isinstance(doc, dict):
+        doc = {"schema_version": 1, "goals": []}
+    if not isinstance(doc.get("goals"), list):
+        doc["goals"] = []
+    doc.setdefault(
+        "boundary",
+        "AcceptedGoal means reviewed or accepted in this project context, not a true value function.",
+    )
+    return doc
+
+
+def add_goal(root: Path, statement: str, source: str, scope: str, review_state: str) -> dict[str, Any]:
+    if not statement.strip():
+        raise SystemExit("goal statement cannot be empty")
+    doc = load_accepted_goals(root)
+    goal_id = f"goal-{slug(statement)}-{short_hash(statement)}"
+    existing = [goal for goal in doc["goals"] if goal.get("id") == goal_id]
+    now = utc_now()
+    record = {
+        "id": goal_id,
+        "statement": statement.strip(),
+        "source": source,
+        "scope": scope,
+        "review_state": review_state,
+        "created_at": now,
+        "updated_at": now,
+        "superseded": False,
+        "retired": False,
+    }
+    if existing:
+        existing[0].update({**record, "created_at": existing[0].get("created_at") or now})
+        saved = existing[0]
+    else:
+        doc["goals"].append(record)
+        saved = record
+    write_json(accepted_goals_path(root), doc)
+    return saved
+
+
+def list_goals(root: Path) -> dict[str, Any]:
+    return load_accepted_goals(root)
+
+
+ALIGNMENT_LABELS = {
+    "necessary_support",
+    "intentional_pivot",
+    "operational_drift",
+    "exploration",
+    "noise",
+    "misclassification",
+    "insufficient_evidence",
+}
+
+
+def alignment_path(root: Path) -> Path:
+    return sm_dir(root) / "alignment" / "alignment-reviews.jsonl"
+
+
+def record_alignment(root: Path, labels: list[str], note: str, review_file: str) -> dict[str, Any]:
+    init_project(root, quiet=True)
+    bad = sorted(set(labels) - ALIGNMENT_LABELS)
+    if bad:
+        raise SystemExit(f"unknown alignment labels: {', '.join(bad)}")
+    if not labels:
+        raise SystemExit("at least one alignment label is required")
+    review_ref = ""
+    if review_file:
+        try:
+            review_ref = str(Path(review_file).expanduser().resolve().relative_to(root.resolve()))
+        except Exception:
+            review_ref = str(Path(review_file).expanduser())
+    ledger_file = sm_dir(root) / "allocations" / "allocation-ledger.json"
+    ledger = load_json(ledger_file, {})
+    record = {
+        "schema_version": 1,
+        "recorded_at": utc_now(),
+        "labels": labels,
+        "note": note,
+        "review_file": review_ref,
+        "ledger_generated_at": ledger.get("generated_at") if isinstance(ledger, dict) else None,
+        "ledger_entry_count": ledger.get("entry_count") if isinstance(ledger, dict) else None,
+    }
+    path = alignment_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    return record
+
+
+def list_alignment(root: Path) -> list[dict[str, Any]]:
+    path = alignment_path(root)
+    if not path.exists():
+        return []
+    records = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            records.append(value)
+    return records
+
+
+def event_text(event: dict[str, Any]) -> str:
+    pieces = [
+        str(event.get("hook_event_name") or ""),
+        str(event.get("tool_name") or ""),
+    ]
+    summary = event.get("tool_input_summary")
+    if isinstance(summary, dict):
+        pieces.extend(str(value) for value in summary.get("keys") or [])
+        pieces.extend(str(value) for value in summary.get("paths") or [])
+        if isinstance(summary.get("command"), dict):
+            pieces.append(str(summary["command"].get("first_token") or ""))
+        if isinstance(summary.get("description"), dict):
+            pieces.append(str(summary["description"].get("preview") or ""))
+    if isinstance(event.get("prompt"), dict):
+        pieces.append(str(event["prompt"].get("preview") or ""))
+    return " ".join(pieces).casefold()
+
+
+def classify(text: str, accepted_goals: list[dict[str, Any]]) -> tuple[list[str], str, str, float, list[str]]:
+    labels: list[str] = []
+    for label, spec in RUBRIC.items():
+        if label == "core_problem":
+            continue
+        patterns = spec.get("patterns") or []
+        if any(pattern in text for pattern in patterns):
+            labels.append(label)
+    related_goal = ""
+    goal_hits = []
+    for goal in accepted_goals:
+        statement = str(goal.get("statement") or goal.get("goal") or "").strip()
+        if not statement:
+            continue
+        tokens = [token for token in re.split(r"[^a-zA-Z0-9_]+", statement.casefold()) if len(token) >= 4]
+        if tokens and any(token in text for token in tokens):
+            goal_hits.append(statement)
+    if goal_hits:
+        labels.insert(0, "core_problem")
+        related_goal = goal_hits[0]
+        supports_mainline = "yes"
+    else:
+        supports_mainline = "unknown"
+    if not labels:
+        labels = ["exploration"]
+        confidence = 0.35
+    else:
+        confidence = min(0.85, 0.45 + 0.1 * len(labels))
+    # Stable order and dedupe.
+    labels = [label for label in RUBRIC if label in set(labels)]
+    ambiguity = []
+    if len(labels) > 1:
+        ambiguity.append("multiple rubric labels matched")
+    return labels, related_goal, supports_mainline, confidence, ambiguity
+
+
+def load_trace_events(root: Path, since: dt.datetime) -> list[dict[str, Any]]:
+    trace_dir = sm_dir(root) / "traces" / "claude-code"
+    events: list[dict[str, Any]] = []
+    if not trace_dir.exists():
+        return events
+    for path in sorted(trace_dir.glob("*.jsonl")):
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            captured = parse_time(event.get("captured_at"))
+            if captured and captured >= since:
+                events.append(event)
+    return events
+
+
+def git_entries(root: Path, since: dt.datetime) -> list[dict[str, Any]]:
+    try:
+        raw = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "log",
+                "--since",
+                since.isoformat(),
+                "--format=%H%x1f%at%x1f%s",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        ).stdout
+    except Exception:
+        return []
+    entries = []
+    for line in raw.splitlines():
+        fields = line.split("\x1f", 2)
+        if len(fields) != 3:
+            continue
+        commit, timestamp, subject = fields
+        when = dt.datetime.fromtimestamp(float(timestamp), tz=dt.timezone.utc)
+        entries.append(
+            {
+                "schema_version": 1,
+                "captured_at": when.isoformat().replace("+00:00", "Z"),
+                "hook_event_name": "GitCommit",
+                "tool_name": "git",
+                "event_id": commit[:20],
+                "tool_input_summary": {
+                    "description": {"preview": subject, "chars": len(subject)},
+                    "commit": commit,
+                },
+            }
+        )
+    return entries
+
+
+def build_ledger(root: Path, since_value: str) -> dict[str, Any]:
+    init_project(root, quiet=True)
+    since = parse_since(since_value)
+    goals_doc = load_json(sm_dir(root) / "goals" / "accepted-goals.json", {"goals": []})
+    accepted_goals = goals_doc.get("goals") if isinstance(goals_doc, dict) else []
+    if not isinstance(accepted_goals, list):
+        accepted_goals = []
+    events = load_trace_events(root, since)
+    events.extend(git_entries(root, since))
+    entries = []
+    for event in events:
+        text = event_text(event)
+        labels, related_goal, supports_mainline, confidence, ambiguity = classify(text, accepted_goals)
+        entries.append(
+            {
+                "schema_version": 1,
+                "timestamp": event.get("captured_at") or utc_now(),
+                "source": event.get("hook_event_name") or "unknown",
+                "resource_type": event.get("tool_name") or event.get("hook_event_name") or "unknown",
+                "allocated_to": labels,
+                "related_goal": related_goal,
+                "supports_mainline": supports_mainline,
+                "confidence": round(confidence, 2),
+                "evidence": [f"trace:{event.get('event_id', 'unknown')}"],
+                "ambiguity": ambiguity,
+                "review_state": "unreviewed",
+            }
+        )
+    counts = Counter(label for entry in entries for label in entry["allocated_to"])
+    ledger = {
+        "schema_version": 1,
+        "generated_at": utc_now(),
+        "since": since.isoformat().replace("+00:00", "Z"),
+        "rubric": list(RUBRIC.keys()),
+        "entry_count": len(entries),
+        "allocation_counts": dict(counts),
+        "entries": entries,
+    }
+    output = sm_dir(root) / "allocations" / "allocation-ledger.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(ledger, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return ledger
+
+
+def render_review(root: Path, since_value: str) -> Path:
+    ledger = build_ledger(root, since_value)
+    base = sm_dir(root)
+    hypothesis = load_json(base / "problems" / "mainline-hypothesis.json", {})
+    goals = load_json(base / "goals" / "accepted-goals.json", {"goals": []})
+    counts = Counter(ledger.get("allocation_counts") or {})
+    total = sum(counts.values()) or 1
+    lines = [
+        "# StillMirror Project Drift Review",
+        "",
+        f"- Generated: {ledger['generated_at']}",
+        f"- Window start: {ledger['since']}",
+        "",
+        "## Mainline Hypothesis",
+        "",
+        f"- Statement: {hypothesis.get('statement') or '(unreviewed)'}",
+        f"- Confidence: {hypothesis.get('confidence', 0)}",
+        f"- Alternatives: {', '.join(hypothesis.get('alternatives') or []) or '(none recorded)'}",
+        "",
+        "## Accepted Goals",
+        "",
+    ]
+    accepted = goals.get("goals") if isinstance(goals, dict) else []
+    if accepted:
+        for goal in accepted:
+            lines.append(f"- {goal.get('statement') or goal.get('goal')}")
+    else:
+        lines.append("- (none recorded yet)")
+    lines.extend(["", "## Allocation Ledger Summary", ""])
+    for label in RUBRIC:
+        count = counts.get(label, 0)
+        pct = round(count * 100 / total)
+        lines.append(f"- `{label}`: {count} ({pct}%)")
+    lines.extend(
+        [
+            "",
+            "## Observed Divergence",
+            "",
+            "This section is an evidence question, not a system judgment.",
+            "",
+        ]
+    )
+    core = counts.get("core_problem", 0)
+    if ledger.get("entry_count", 0) == 0:
+        lines.append("- No allocation entries were observed in this window.")
+    elif core == 0:
+        lines.append("- No entries were classified as `core_problem`; review whether this is missing context, necessary support, exploration, or misclassification.")
+    else:
+        lines.append("- Some entries matched `core_problem`; review whether the surrounding support allocations are appropriate.")
+    lines.extend(
+        [
+            "",
+            "## Alignment Review",
+            "",
+            "Choose one or more labels:",
+            "",
+            "- necessary_support",
+            "- intentional_pivot",
+            "- operational_drift",
+            "- exploration",
+            "- noise",
+            "- misclassification",
+            "- insufficient_evidence",
+            "",
+            "## Boundaries",
+            "",
+            "- No drift score is produced.",
+            "- No objective-capture diagnosis is produced.",
+            "- Alignment is user review, not system verdict.",
+            "",
+        ]
+    )
+    output = base / "reviews" / f"{utc_now()[:10]}-project-drift-review.md"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("\n".join(lines), encoding="utf-8")
+    return output
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="StillMirror Review local helper")
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("init")
+    ledger = sub.add_parser("ledger")
+    ledger.add_argument("--since", default="30d")
+    review = sub.add_parser("review")
+    review.add_argument("--since", default="30d")
+    goals = sub.add_parser("goals")
+    goals_sub = goals.add_subparsers(dest="goals_command")
+    goals_add = goals_sub.add_parser("add")
+    goals_add.add_argument("statement")
+    goals_add.add_argument("--source", default="user")
+    goals_add.add_argument("--scope", default="project")
+    goals_add.add_argument("--review-state", default="accepted", choices=["reviewed", "accepted"])
+    goals_sub.add_parser("list")
+    alignment = sub.add_parser("alignment")
+    alignment_sub = alignment.add_subparsers(dest="alignment_command")
+    alignment_record = alignment_sub.add_parser("record")
+    alignment_record.add_argument("--label", action="append", required=True, choices=sorted(ALIGNMENT_LABELS))
+    alignment_record.add_argument("--note", default="")
+    alignment_record.add_argument("--review-file", default="")
+    alignment_sub.add_parser("list")
+    args = parser.parse_args()
+    root = project_root()
+    if args.command == "init":
+        init_project(root)
+    elif args.command == "ledger":
+        result = build_ledger(root, args.since)
+        print(json.dumps({"entry_count": result["entry_count"], "output": str(sm_dir(root) / "allocations" / "allocation-ledger.json")}, ensure_ascii=False, indent=2))
+    elif args.command == "review":
+        output = render_review(root, args.since)
+        print(json.dumps({"output": str(output)}, ensure_ascii=False, indent=2))
+    elif args.command == "goals":
+        if args.goals_command == "add":
+            goal = add_goal(root, args.statement, args.source, args.scope, args.review_state)
+            print(json.dumps({"goal": goal, "output": str(accepted_goals_path(root))}, ensure_ascii=False, indent=2))
+        elif args.goals_command == "list":
+            print(json.dumps(list_goals(root), ensure_ascii=False, indent=2))
+        else:
+            goals.print_help()
+            return 2
+    elif args.command == "alignment":
+        if args.alignment_command == "record":
+            record = record_alignment(root, args.label, args.note, args.review_file)
+            print(json.dumps({"record": record, "output": str(alignment_path(root))}, ensure_ascii=False, indent=2))
+        elif args.alignment_command == "list":
+            print(json.dumps({"records": list_alignment(root)}, ensure_ascii=False, indent=2))
+        else:
+            alignment.print_help()
+            return 2
+    else:
+        parser.print_help()
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

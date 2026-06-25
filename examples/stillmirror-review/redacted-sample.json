@@ -1,0 +1,210 @@
+{
+  "schema_version": 1,
+  "sample_type": "redacted_stillmirror_review",
+  "privacy_boundary": "No raw prompts, transcript paths, local absolute paths, private excerpts, or raw tool payloads are included.",
+  "source": "StillMirror repository Claude Code plugin validation session",
+  "ledger": {
+    "generated_at": "2026-06-25T17:17:53.390473Z",
+    "since": "2026-05-26T17:17:53.371009Z",
+    "entry_count": 44,
+    "rubric": [
+      "core_problem",
+      "support_infrastructure",
+      "evaluation",
+      "packaging_distribution",
+      "maintenance_debugging",
+      "exploration"
+    ],
+    "allocation_counts": {
+      "exploration": 18,
+      "core_problem": 20,
+      "support_infrastructure": 14,
+      "evaluation": 9,
+      "packaging_distribution": 9
+    },
+    "example_entries": [
+      {
+        "timestamp": "2026-06-25T17:02:51.787152Z",
+        "source": "SessionStart",
+        "resource_type": "SessionStart",
+        "allocated_to": [
+          "exploration"
+        ],
+        "related_goal": "",
+        "supports_mainline": "unknown",
+        "confidence": 0.35,
+        "ambiguity": [],
+        "review_state": "unreviewed"
+      },
+      {
+        "timestamp": "2026-06-25T17:05:11.430493Z",
+        "source": "UserPromptSubmit",
+        "resource_type": "UserPromptSubmit",
+        "allocated_to": [
+          "exploration"
+        ],
+        "related_goal": "",
+        "supports_mainline": "unknown",
+        "confidence": 0.35,
+        "ambiguity": [],
+        "review_state": "unreviewed"
+      },
+      {
+        "timestamp": "2026-06-25T17:05:13.991648Z",
+        "source": "PostToolUse",
+        "resource_type": "Skill",
+        "allocated_to": [
+          "exploration"
+        ],
+        "related_goal": "",
+        "supports_mainline": "unknown",
+        "confidence": 0.35,
+        "ambiguity": [],
+        "review_state": "unreviewed"
+      },
+      {
+        "timestamp": "2026-06-25T17:05:24.147626Z",
+        "source": "PostToolUse",
+        "resource_type": "Bash",
+        "allocated_to": [
+          "core_problem",
+          "support_infrastructure",
+          "evaluation"
+        ],
+        "related_goal": "Validate StillMirror Review as a Claude Code plugin for allocation-ledger based project drift review",
+        "supports_mainline": "yes",
+        "confidence": 0.75,
+        "ambiguity": [
+          "multiple rubric labels matched"
+        ],
+        "review_state": "unreviewed"
+      },
+      {
+        "timestamp": "2026-06-25T17:05:27.796720Z",
+        "source": "Stop",
+        "resource_type": "Stop",
+        "allocated_to": [
+          "exploration"
+        ],
+        "related_goal": "",
+        "supports_mainline": "unknown",
+        "confidence": 0.35,
+        "ambiguity": [],
+        "review_state": "unreviewed"
+      },
+      {
+        "timestamp": "2026-06-25T17:06:01.059138Z",
+        "source": "UserPromptSubmit",
+        "resource_type": "UserPromptSubmit",
+        "allocated_to": [
+          "exploration"
+        ],
+        "related_goal": "",
+        "supports_mainline": "unknown",
+        "confidence": 0.35,
+        "ambiguity": [],
+        "review_state": "unreviewed"
+      },
+      {
+        "timestamp": "2026-06-25T17:06:05.576684Z",
+        "source": "PostToolUse",
+        "resource_type": "Read",
+        "allocated_to": [
+          "packaging_distribution"
+        ],
+        "related_goal": "",
+        "supports_mainline": "unknown",
+        "confidence": 0.55,
+        "ambiguity": [],
+        "review_state": "unreviewed"
+      },
+      {
+        "timestamp": "2026-06-25T17:06:05.726857Z",
+        "source": "PostToolUse",
+        "resource_type": "Read",
+        "allocated_to": [
+          "core_problem",
+          "support_infrastructure",
+          "packaging_distribution"
+        ],
+        "related_goal": "Validate StillMirror Review as a Claude Code plugin for allocation-ledger based project drift review",
+        "supports_mainline": "yes",
+        "confidence": 0.75,
+        "ambiguity": [
+          "multiple rubric labels matched"
+        ],
+        "review_state": "unreviewed"
+      },
+      {
+        "timestamp": "2026-06-25T17:06:11.688185Z",
+        "source": "PostToolUse",
+        "resource_type": "Bash",
+        "allocated_to": [
+          "core_problem",
+          "support_infrastructure"
+        ],
+        "related_goal": "Validate StillMirror Review as a Claude Code plugin for allocation-ledger based project drift review",
+        "supports_mainline": "yes",
+        "confidence": 0.65,
+        "ambiguity": [
+          "multiple rubric labels matched"
+        ],
+        "review_state": "unreviewed"
+      },
+      {
+        "timestamp": "2026-06-25T17:06:12.205284Z",
+        "source": "PostToolUse",
+        "resource_type": "Bash",
+        "allocated_to": [
+          "core_problem"
+        ],
+        "related_goal": "Validate StillMirror Review as a Claude Code plugin for allocation-ledger based project drift review",
+        "supports_mainline": "yes",
+        "confidence": 0.55,
+        "ambiguity": [],
+        "review_state": "unreviewed"
+      },
+      {
+        "timestamp": "2026-06-25T17:06:22.120508Z",
+        "source": "PostToolUse",
+        "resource_type": "Bash",
+        "allocated_to": [
+          "core_problem",
+          "support_infrastructure",
+          "evaluation"
+        ],
+        "related_goal": "Validate StillMirror Review as a Claude Code plugin for allocation-ledger based project drift review",
+        "supports_mainline": "yes",
+        "confidence": 0.75,
+        "ambiguity": [
+          "multiple rubric labels matched"
+        ],
+        "review_state": "unreviewed"
+      },
+      {
+        "timestamp": "2026-06-25T17:06:22.187964Z",
+        "source": "PostToolUse",
+        "resource_type": "Bash",
+        "allocated_to": [
+          "support_infrastructure"
+        ],
+        "related_goal": "",
+        "supports_mainline": "unknown",
+        "confidence": 0.55,
+        "ambiguity": [],
+        "review_state": "unreviewed"
+      }
+    ]
+  },
+  "alignment_reviews": [
+    {
+      "recorded_at": "2026-06-25T17:18:58.082405Z",
+      "labels": [
+        "necessary_support",
+        "exploration"
+      ],
+      "note": "Reviewed by Hao on 2026-06-26: recent support_infrastructure, evaluation, packaging_distribution, and exploration allocations are necessary support for validating StillMirror Review as a Claude Code plugin. Some marketplace and rubric work remains exploratory. This is user review, not a system verdict.",
+      "ledger_entry_count": 44
+    }
+  ]
+}
