@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -262,6 +263,75 @@ class StillMirrorPluginTests(unittest.TestCase):
             self.assertEqual(doc["statement"], "Validate the review layer")
             self.assertEqual(doc["confidence"], 0.6)
             self.assertEqual(doc["review_state"], "reviewed")
+
+    def test_review_due_tracks_new_work_and_resets(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.run_script(project, "goals", "add", "hook reliability")
+            self.capture(project, self.edit_payload(project))
+            due = json.loads(self.run_script(project, "review-due", "--threshold", "1").stdout)
+            self.assertTrue(due["due"])
+            self.assertEqual(due["new_allocations"], 1)
+            self.assertEqual(due["sessions_touched"], 1)
+            self.assertGreaterEqual(due["new_goal_events"], 1)
+            # Recording an alignment review resets the "since last review" clock.
+            self.run_script(project, "review", "--since", "30d")
+            self.run_script(project, "alignment", "record", "--label", "necessary_support", "--note", "ok")
+            after = json.loads(self.run_script(project, "review-due", "--threshold", "1").stdout)
+            self.assertFalse(after["due"])
+            self.assertEqual(after["new_allocations"], 0)
+
+    def test_nudge_silent_unless_opted_in_and_due(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.capture(project, self.edit_payload(project))
+            payload = json.dumps({"hook_event_name": "SessionStart", "cwd": str(project)})
+            silent = subprocess.run(
+                [str(REVIEW), "review-due", "--nudge", "--threshold", "1"],
+                cwd=project, input=payload, capture_output=True, text=True, encoding="utf-8",
+            )
+            self.assertEqual(silent.stdout.strip(), "")
+            opted = subprocess.run(
+                [str(REVIEW), "review-due", "--nudge", "--threshold", "1"],
+                cwd=project, input=payload, capture_output=True, text=True, encoding="utf-8",
+                env={**os.environ, "STILLMIRROR_SESSION_NUDGE": "1"},
+            )
+            self.assertIn("additionalContext", opted.stdout)
+            self.assertIn("StillMirror", opted.stdout)
+
+    def test_review_has_triage_section(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.run_script(project, "goals", "add", "hook reliability")
+            self.capture(project, self.edit_payload(project))  # links to the goal
+            self.capture(project, {
+                "hook_event_name": "PostToolUse", "cwd": str(project), "session_id": "other",
+                "tool_name": "Read", "tool_input": {"file_path": "notes.md"},  # unlinked
+            })
+            self.run_script(project, "review", "--since", "30d")
+            text = next((project / ".stillmirror" / "reviews").glob("*-project-alignment-review.md")).read_text()
+            self.assertIn("## Triage — what's worth your attention", text)
+            self.assertIn("unlinked (no goal signal):", text)
+            self.assertIn("By session / agent thread", text)
+            self.assertIn("Surfaced ≠", text)  # "Surfaced ≠ judged wrong" disclaimer
+
+    def test_base_scopes_to_branch_commits(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+
+            def git(*args: str) -> None:
+                subprocess.run(["git", "-C", str(project), *args], check=True, capture_output=True, text=True)
+
+            git("init")
+            git("config", "user.email", "t@t.co")
+            git("config", "user.name", "t")
+            git("commit", "--allow-empty", "-m", "on main")
+            git("checkout", "-b", "feature")
+            git("commit", "--allow-empty", "-m", "feature: add capture")
+            git("commit", "--allow-empty", "-m", "feature: fix bug")
+            self.run_script(project, "ledger", "--since", "365d", "--base", "main")
+            ledger = self.load_ledger(project)
+            self.assertEqual(ledger["entry_count"], 2)  # only the two feature commits
 
 
 if __name__ == "__main__":

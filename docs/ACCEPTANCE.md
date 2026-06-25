@@ -22,7 +22,17 @@ Functional gates:
   `goals/goal-events.jsonl`.
 - `problem set` writes `problems/mainline-hypothesis.json`.
 - `review` emits a Markdown **Project Alignment Review** with Coverage & Blind
-  Spots and Goal Provenance sections, and no drift scores or verdicts.
+  Spots, Goal Provenance, and **Triage** sections, and no drift scores or
+  verdicts.
+- `review-due` derives `new_allocations`, `new_goal_events`, and
+  `sessions_touched` since the last alignment record, and `due` flips on
+  threshold.
+- the SessionStart `review-due --nudge` hook is silent unless
+  `STILLMIRROR_SESSION_NUDGE=1` and a review is due.
+- `review --base <ref>` scopes the window to a branch's commits.
+- the Triage section groups by goal (with an `unlinked` bucket) and by session,
+  surfaces exceptions with `event_id`s, and carries the "surfaced ≠ judged"
+  disclaimer (no agent ranking, no trends).
 - `alignment record/list` writes user review records.
 - redacted sample contains no private paths, raw prompts, or transcript payloads.
 

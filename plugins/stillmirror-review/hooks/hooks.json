@@ -7,6 +7,11 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/bin/stillmirror-capture",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/stillmirror-review review-due --nudge",
+            "timeout": 5
           }
         ]
       }

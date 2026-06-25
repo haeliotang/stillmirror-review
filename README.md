@@ -37,7 +37,7 @@ claude plugin details stillmirror-review
 Expected shape:
 
 ```text
-stillmirror-review 0.2.0
+stillmirror-review 0.3.0
   The review layer for agentic work. Joins accepted-goal provenance with
   allocation evidence for user alignment review.
   Source: stillmirror-review@stillmirror
@@ -112,9 +112,20 @@ plugins/stillmirror-review/bin/stillmirror-review goals retire "<goal id or stat
 plugins/stillmirror-review/bin/stillmirror-review goals events
 plugins/stillmirror-review/bin/stillmirror-review ledger --since 30d
 plugins/stillmirror-review/bin/stillmirror-review correct --event <event_id> --label evaluation
+plugins/stillmirror-review/bin/stillmirror-review review-due
 plugins/stillmirror-review/bin/stillmirror-review review --since 30d
+plugins/stillmirror-review/bin/stillmirror-review review --base origin/main
 plugins/stillmirror-review/bin/stillmirror-review alignment record --label necessary_support
 ```
+
+## Triggers
+
+A review layer is worthless if review never happens. StillMirror triggers review
+at **human** and **work-product** boundaries — never per agent or per task (those
+do not scale to many agents). `review-due` reports what accumulated since your
+last review (including `sessions_touched`, the number of agent threads); an
+opt-in SessionStart nudge surfaces it; and `review --base <ref>` scopes a review
+to a branch at PR time. See [docs/TRIGGERS.md](docs/TRIGGERS.md).
 
 ## What gets written
 
@@ -133,8 +144,11 @@ StillMirror Review writes local project state under:
 Each allocation entry carries a **receipt** — the matched rubric patterns and
 goal tokens behind its label — so you can audit *why* it was classified, not just
 trust it. When you `correct` an entry, the ledger honors that human label on
-every later run. The review also reports **coverage / blind spots**: what
-StillMirror structurally could not see.
+every later run. The review also reports **coverage / blind spots** (what
+StillMirror structurally could not see) and a **Triage** section that, for a
+flood of multi-agent work, clusters allocations by goal and by agent thread and
+surfaces exceptions for review — always decomposable back to receipts, never a
+score or ranking.
 
 The default hook capture stores sanitized event summaries, hashes, resource
 types, tool names, file paths, and timestamps. It does not store raw prompts by

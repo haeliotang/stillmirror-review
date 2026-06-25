@@ -52,10 +52,23 @@ plugins/stillmirror-review/bin/stillmirror-review goals retire "<goal id or stat
 plugins/stillmirror-review/bin/stillmirror-review goals events
 plugins/stillmirror-review/bin/stillmirror-review ledger --since 30d
 plugins/stillmirror-review/bin/stillmirror-review correct --event <event_id> --label evaluation
+plugins/stillmirror-review/bin/stillmirror-review review-due
 plugins/stillmirror-review/bin/stillmirror-review review --since 30d
+plugins/stillmirror-review/bin/stillmirror-review review --base origin/main
 plugins/stillmirror-review/bin/stillmirror-review alignment record --label necessary_support
 plugins/stillmirror-review/bin/stillmirror-review alignment list
 ```
+
+## Triggers (review when it matters)
+
+Review is triggered at **human** and **work-product** boundaries, never per agent
+or per task. `review-due` reports what accumulated since your last review
+(including `sessions_touched`); an opt-in SessionStart nudge
+(`STILLMIRROR_SESSION_NUDGE=1`) surfaces it as one quiet line; and
+`review --base <ref>` scopes a review to a branch at PR time. The review's
+**Triage** section clusters a flood of multi-agent work by goal and by agent
+thread and surfaces exceptions — always decomposable to receipts, never a
+ranking. See [docs/TRIGGERS.md](https://github.com/haeliotang/stillmirror-review/blob/main/docs/TRIGGERS.md).
 
 ## What gets written
 

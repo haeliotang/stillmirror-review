@@ -10,6 +10,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -620,18 +621,16 @@ def load_trace_events(root: Path, since: dt.datetime) -> list[dict[str, Any]]:
     return events
 
 
-def git_entries(root: Path, since: dt.datetime) -> list[dict[str, Any]]:
+def git_entries(root: Path, since: dt.datetime, base_range: str = "") -> list[dict[str, Any]]:
+    # With a base ref, scope to the exact commit range base..HEAD (precise for a
+    # PR/branch); otherwise fall back to the time window.
+    if base_range:
+        selector = [f"{base_range}..HEAD"]
+    else:
+        selector = ["--since", since.isoformat()]
     try:
         raw = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(root),
-                "log",
-                "--since",
-                since.isoformat(),
-                "--format=%H%x1f%at%x1f%s",
-            ],
+            ["git", "-C", str(root), "log", *selector, "--format=%H%x1f%at%x1f%s"],
             check=True,
             capture_output=True,
             text=True,
@@ -662,6 +661,120 @@ def git_entries(root: Path, since: dt.datetime) -> list[dict[str, Any]]:
             }
         )
     return entries
+
+
+def base_since_value(root: Path, base_ref: str) -> str | None:
+    """Resolve the commit time of merge-base(base_ref, HEAD) as an ISO string.
+
+    Used to scope a review to "this branch's work" for a PR-time trigger.
+    """
+    try:
+        merge_base = subprocess.run(
+            ["git", "-C", str(root), "merge-base", base_ref, "HEAD"],
+            check=True, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+        ).stdout.strip()
+        if not merge_base:
+            return None
+        when = subprocess.run(
+            ["git", "-C", str(root), "show", "-s", "--format=%cI", merge_base],
+            check=True, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+        ).stdout.strip()
+        return when or None
+    except Exception:
+        return None
+
+
+def last_reviewed_at(root: Path) -> dt.datetime | None:
+    """Timestamp of the most recent recorded alignment review, if any."""
+    times = [parse_time(record.get("recorded_at")) for record in list_alignment(root)]
+    times = [value for value in times if value]
+    return max(times) if times else None
+
+
+def compute_review_due(root: Path, threshold: int) -> dict[str, Any]:
+    """Derive whether a review is due, keyed to *human* boundaries, not agents.
+
+    "New since your last review" aggregates across every session/agent thread,
+    so one human return surfaces one number no matter how many agents ran.
+    No persisted state: everything is derived from existing traces, goal events,
+    and the last alignment record.
+    """
+    init_project(root, quiet=True)
+    reference = last_reviewed_at(root)
+    epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+    events = load_trace_events(root, reference or epoch)
+    new_allocations = [
+        event for event in events
+        if str(event.get("hook_event_name") or "") not in LIFECYCLE_EVENTS
+    ]
+    sessions = {
+        str(event.get("session_id_hash") or "")
+        for event in new_allocations
+        if event.get("session_id_hash")
+    }
+    goal_events = list_goal_events(root)
+    if reference is not None:
+        goal_events = [
+            event for event in goal_events
+            if (parse_time(event.get("recorded_at")) or epoch) > reference
+        ]
+    due = len(new_allocations) >= threshold or len(goal_events) > 0
+    return {
+        "due": due,
+        "threshold": threshold,
+        "last_reviewed_at": reference.isoformat().replace("+00:00", "Z") if reference else None,
+        "new_allocations": len(new_allocations),
+        "new_goal_events": len(goal_events),
+        "sessions_touched": len(sessions),
+    }
+
+
+def nudge_threshold(explicit: int | None) -> int:
+    if explicit is not None:
+        return explicit
+    try:
+        return int(os.environ.get("STILLMIRROR_NUDGE_THRESHOLD", ""))
+    except ValueError:
+        return 20
+
+
+def run_nudge(threshold: int) -> int:
+    """SessionStart hook body: stay silent unless opted in AND a review is due.
+
+    Triggers at a *human* boundary (a new session), aggregating all agent work
+    accumulated since the last review into a single quiet line.
+    """
+    if os.environ.get("STILLMIRROR_SESSION_NUDGE") != "1":
+        return 0
+    try:
+        raw = sys.stdin.read()
+    except Exception:
+        raw = ""
+    root = project_root()
+    try:
+        payload = json.loads(raw) if raw.strip() else {}
+        if isinstance(payload, dict) and payload.get("cwd"):
+            root = Path(str(payload["cwd"])).expanduser().resolve()
+    except Exception:
+        pass
+    try:
+        status = compute_review_due(root, threshold)
+    except Exception:
+        return 0
+    if not status["due"]:
+        return 0
+    message = (
+        f"StillMirror: {status['new_allocations']} allocation(s) across "
+        f"{status['sessions_touched']} session(s) and {status['new_goal_events']} "
+        f"goal event(s) since your last review — run /stillmirror-review:review"
+    )
+    print(
+        json.dumps(
+            {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": message}},
+            ensure_ascii=False,
+        )
+    )
+    return 0
 
 
 def corrections_path(root: Path) -> Path:
@@ -709,16 +822,20 @@ def record_correction(root: Path, event_id: str, labels: list[str], note: str) -
     return record
 
 
-def build_ledger(root: Path, since_value: str) -> dict[str, Any]:
+def build_ledger(root: Path, since_value: str, base: str | None = None) -> dict[str, Any]:
     init_project(root, quiet=True)
-    since = parse_since(since_value)
+    if base:
+        resolved = base_since_value(root, base)
+        since = parse_since(resolved) if resolved else parse_since(since_value)
+    else:
+        since = parse_since(since_value)
     goals_doc = load_json(sm_dir(root) / "goals" / "accepted-goals.json", {"goals": []})
     accepted_goals = goals_doc.get("goals") if isinstance(goals_doc, dict) else []
     if not isinstance(accepted_goals, list):
         accepted_goals = []
     corrections = load_corrections(root)
     events = load_trace_events(root, since)
-    git_events = git_entries(root, since)
+    git_events = git_entries(root, since, base or "")
     events.extend(git_events)
     entries = []
     reinforcement: Counter[str] = Counter()
@@ -739,6 +856,7 @@ def build_ledger(root: Path, since_value: str) -> dict[str, Any]:
             "schema_version": 1,
             "timestamp": event.get("captured_at") or utc_now(),
             "event_id": event_id,
+            "session": str(event.get("session_id_hash") or ""),
             "source": event.get("hook_event_name") or "unknown",
             "resource_type": event.get("tool_name") or event.get("hook_event_name") or "unknown",
             "allocated_to": allocated_to,
@@ -817,8 +935,8 @@ def build_ledger(root: Path, since_value: str) -> dict[str, Any]:
     return ledger
 
 
-def render_review(root: Path, since_value: str) -> Path:
-    ledger = build_ledger(root, since_value)
+def render_review(root: Path, since_value: str, base_ref: str | None = None) -> Path:
+    ledger = build_ledger(root, since_value, base_ref)
     base = sm_dir(root)
     hypothesis = load_json(base / "problems" / "mainline-hypothesis.json", {})
     goals = load_json(base / "goals" / "accepted-goals.json", {"goals": []})
@@ -897,6 +1015,76 @@ def render_review(root: Path, since_value: str) -> Path:
         for event in goal_events[-5:]:
             lines.append(f"- {event.get('recorded_at', '')[:10]} `{event.get('type')}` — {event.get('statement')}")
 
+    # Triage: where to spend scarce human attention across a flood of agent work.
+    # Aggregate to navigate (clusters + surfaced exceptions), never to judge.
+    entries = ledger.get("entries") or []
+    reference = last_reviewed_at(root)
+    epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+    unlinked = [
+        entry for entry in entries
+        if entry["allocated_to"] != ["noise"] and not entry["receipt"]["goal_signals"]
+    ]
+    if reference is not None:
+        new_since = [entry for entry in entries if (parse_time(entry.get("timestamp")) or epoch) > reference]
+    else:
+        new_since = [entry for entry in entries if entry["allocated_to"] != ["noise"]]
+    by_session: dict[str, Counter] = {}
+    for entry in entries:
+        key = entry.get("session") or "(non-session: git/other)"
+        by_session.setdefault(key, Counter())
+        for label in entry["allocated_to"]:
+            by_session[key][label] += 1
+
+    lines.extend(
+        [
+            "",
+            "## Triage — what's worth your attention",
+            "",
+            "Pointers for where to spend review attention, not judgments. Surfaced ≠",
+            "judged wrong; not surfaced ≠ approved. Every item is auditable by its",
+            "`event_id` in the ledger.",
+            "",
+            "By problem (allocations linked to each accepted goal):",
+        ]
+    )
+    if accepted:
+        for goal in accepted:
+            hits = reinforcement.get(str(goal.get("id") or ""), 0)
+            lines.append(f"- {goal.get('statement') or goal.get('goal')}: {hits}")
+    else:
+        lines.append("- (no accepted goals to link against)")
+    lines.append(f"- unlinked (no goal signal): {len(unlinked)}  ← work not tied to any accepted goal")
+    lines.extend(
+        [
+            "",
+            "By session / agent thread (which problems each thread served — coverage, not a ranking):",
+        ]
+    )
+    if by_session:
+        for key in sorted(by_session):
+            mix = ", ".join(f"{label}:{count}" for label, count in by_session[key].most_common())
+            short = key[:8] if key and not key.startswith("(") else key
+            lines.append(f"- session {short}: {mix}")
+    else:
+        lines.append("- (no sessions in window)")
+    lines.extend(["", "Surfaced for review:"])
+    if unlinked:
+        ids = ", ".join(entry["event_id"] for entry in unlinked[:8])
+        more = "" if len(unlinked) <= 8 else f" (+{len(unlinked) - 8} more)"
+        lines.append(f"- {len(unlinked)} allocation(s) not linked to any accepted goal — event_ids: {ids}{more}")
+    if reference is not None:
+        lines.append(
+            f"- {len(new_since)} allocation(s) new since your last review "
+            f"({reference.isoformat().replace('+00:00', 'Z')[:10]})"
+        )
+    else:
+        lines.append(f"- no prior review recorded; treat all {len(new_since)} non-noise allocation(s) as unreviewed")
+    low_signal = coverage.get("low_signal_entries", 0)
+    if low_signal:
+        lines.append(f"- {low_signal} entry(ies) could not be classified (no rubric or goal signal)")
+    if coverage.get("note"):
+        lines.append(f"- {coverage['note']}")
+
     lines.extend(
         [
             "",
@@ -971,8 +1159,13 @@ def main() -> int:
     sub.add_parser("init")
     ledger = sub.add_parser("ledger")
     ledger.add_argument("--since", default="30d")
+    ledger.add_argument("--base", default="", help="scope to commits since merge-base(<ref>, HEAD)")
     review = sub.add_parser("review")
     review.add_argument("--since", default="30d")
+    review.add_argument("--base", default="", help="scope to commits since merge-base(<ref>, HEAD)")
+    review_due = sub.add_parser("review-due")
+    review_due.add_argument("--threshold", type=int, default=None)
+    review_due.add_argument("--nudge", action="store_true", help="SessionStart hook mode: emit a quiet line only if opted in and due")
     goals = sub.add_parser("goals")
     goals_sub = goals.add_subparsers(dest="goals_command")
     goals_add = goals_sub.add_parser("add")
@@ -1014,11 +1207,16 @@ def main() -> int:
     if args.command == "init":
         init_project(root)
     elif args.command == "ledger":
-        result = build_ledger(root, args.since)
+        result = build_ledger(root, args.since, args.base or None)
         print(json.dumps({"entry_count": result["entry_count"], "output": str(sm_dir(root) / "allocations" / "allocation-ledger.json")}, ensure_ascii=False, indent=2))
     elif args.command == "review":
-        output = render_review(root, args.since)
+        output = render_review(root, args.since, args.base or None)
         print(json.dumps({"output": str(output)}, ensure_ascii=False, indent=2))
+    elif args.command == "review-due":
+        threshold = nudge_threshold(args.threshold)
+        if args.nudge:
+            return run_nudge(threshold)
+        print(json.dumps(compute_review_due(root, threshold), ensure_ascii=False, indent=2))
     elif args.command == "goals":
         if args.goals_command == "add":
             goal = add_goal(root, args.statement, args.source, args.scope, args.review_state)

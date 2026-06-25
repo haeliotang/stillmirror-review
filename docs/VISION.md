@@ -64,16 +64,41 @@ alignment label, a conclusion the human may reach, never the system's frame.
 Everything else is a *view* on the spine or a later adapter, never a new pillar.
 Resist roadmap-as-menu.
 
+## Multi-agent principle (the v0.3 reframe)
+
+As agents multiply, humans cannot face N agents or read every subtask. That
+reframes StillMirror from "a mirror you look into" to **an attention allocator
+for human oversight** — it decides *where scarce human attention should go* among
+a flood of agent work. That is one step from the avoid-list ("deciding what
+matters" = a verdict), so the governing principle is:
+
+> Trigger at the boundaries of human attention and work products — never at the
+> boundaries of agents or tasks. Aggregate to navigate, never to judge.
+
+**Two kinds of aggregation.** In a multi-agent world aggregation is not optional
+vanity; it is the only way a human can engage at all. The line that keeps it
+honest:
+
+- *Verdict aggregation* (forbidden) collapses events into a score / grade /
+  trend, destroying the evidence.
+- *Triage aggregation* (necessary) collapses events into navigable clusters +
+  surfaced exceptions, **always decomposable back to v0.2 receipts**. It says
+  "this cluster has no goal link — you may want to look; evidence here", never
+  "this cluster is bad". v0.2's receipts/coverage/correction are the precondition
+  that makes safe aggregation possible.
+
 ## Roadmap (depth before breadth)
 
-- **v0.2 — The Trustworthy Spine** *(current)*: evidence receipts, correction
-  loop, coverage / blind-spot honesty, goal-event log, reinforcement join, and
-  wiring the mainline-hypothesis. Reframe + artifact rename.
-- **v0.3 — Review ritual & triggers**: *when and where review happens* (PR-time,
-  weekly cron, end-of-session "review due" signal). A review layer is worthless
-  if review never happens — this is the highest-leverage unsolved problem.
+- **v0.2 — The Trustworthy Spine**: evidence receipts, correction loop, coverage
+  / blind-spot honesty, goal-event log, reinforcement join, and wiring the
+  mainline-hypothesis. Reframe + artifact rename.
+- **v0.3 — Review ritual & triggers** *(current)*: review-due state; a
+  human-boundary SessionStart nudge (opt-in) and a PR-time `--base` review;
+  triage aggregation (by goal, by agent thread, surfaced exceptions) in the
+  review. See [TRIGGERS.md](TRIGGERS.md).
 - **v0.4 — Evidence breadth**: commit / diff / PR / issue ingestion;
-  session-to-session comparison.
+  session-to-session comparison and deltas (kept out of v0.3 to avoid trend /
+  verdict creep).
 - **Parallel — Open-source Maintainer Review (wedge)**: no capture required;
   start anytime, decoupled from the spine.
 - **v0.5 — Claude Desktop MCPB review adapter**: read `.stillmirror/` for
