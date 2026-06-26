@@ -93,7 +93,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }       # full history for the review window
-      - uses: haeliotang/stillmirror-review/.github/actions/maintainer-review@stillmirror-review--v0.3.2
+      - uses: haeliotang/stillmirror-review/.github/actions/maintainer-review@stillmirror-review--v0.3.3
         with:
           since: "90d"
           publish-badge: "true"
