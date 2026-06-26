@@ -369,6 +369,63 @@ def list_goal_events(root: Path) -> list[dict[str, Any]]:
     return events
 
 
+def focus_path(root: Path) -> Path:
+    return sm_dir(root) / "goals" / "focus.jsonl"
+
+
+def append_focus(root: Path, goal_id: str, statement: str, note: str = "") -> dict[str, Any]:
+    """Append a time-windowed intent declaration. Ground truth, not a guess: the
+    work itself (a human, or an agent) declares which goal it serves."""
+    record = {
+        "schema_version": 1,
+        "recorded_at": utc_now(),
+        "goal_id": goal_id,
+        "statement": statement,
+        "note": note,
+    }
+    path = focus_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    return record
+
+
+def list_focus(root: Path) -> list[dict[str, Any]]:
+    path = focus_path(root)
+    if not path.exists():
+        return []
+    records = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            records.append(value)
+    records.sort(key=lambda record: str(record.get("recorded_at") or ""))
+    return records
+
+
+def active_focus_at(records: list[dict[str, Any]], when: dt.datetime | None) -> dict[str, Any] | None:
+    """The focus in effect at ``when`` — the latest declaration at or before it.
+
+    A record with an empty ``goal_id`` is a 'clear': it ends attribution, so the
+    active focus is None until the next declaration.
+    """
+    if when is None:
+        return None
+    active = None
+    for record in records:
+        rec_when = parse_time(record.get("recorded_at"))
+        if rec_when is not None and rec_when <= when:
+            active = record
+    if active is None or not active.get("goal_id"):
+        return None
+    return active
+
+
 def resolve_goal(doc: dict[str, Any], ref: str) -> dict[str, Any] | None:
     """Resolve a goal by exact id, unique id substring, or exact statement."""
     goals = doc.get("goals") or []
@@ -504,6 +561,22 @@ def set_problem(root: Path, statement: str, confidence: float, alternatives: lis
     doc.setdefault("evidence", [])
     write_json(path, doc)
     return doc
+
+
+def set_focus(root: Path, ref: str, note: str = "") -> dict[str, Any]:
+    """Declare the current work's intent. Resolves an accepted goal, or adds it."""
+    if not ref.strip():
+        raise SystemExit("focus needs a goal reference or statement")
+    doc = load_accepted_goals(root)
+    goal = resolve_goal(doc, ref)
+    if goal is None:
+        goal = add_goal(root, ref, "user", "project", "accepted")
+    return append_focus(root, str(goal.get("id") or ""), str(goal.get("statement") or ref.strip()), note)
+
+
+def clear_focus(root: Path) -> dict[str, Any]:
+    init_project(root, quiet=True)
+    return append_focus(root, "", "", "")
 
 
 def list_goals(root: Path) -> dict[str, Any]:
@@ -971,6 +1044,7 @@ def build_ledger(root: Path, since_value: str, base: str | None = None) -> dict[
     if not isinstance(accepted_goals, list):
         accepted_goals = []
     corrections = load_corrections(root)
+    focus_records = list_focus(root)
     events = load_trace_events(root, since)
     git_events = git_entries(root, since, base or "")
     events.extend(git_events)
@@ -980,15 +1054,41 @@ def build_ledger(root: Path, since_value: str, base: str | None = None) -> dict[
         text = event_text(event)
         result = classify(text, accepted_goals, str(event.get("hook_event_name") or ""))
         event_id = str(event.get("event_id") or "unknown")
-        auto_labels = result["labels"]
+        auto_labels = list(result["labels"])
+        related_goal = result["related_goal"]
+        supports_mainline = result["supports_mainline"]
+        reason = result["reason"]
+        # Declared intent is ground truth — it overrides the keyword goal-guess.
+        focus = active_focus_at(focus_records, parse_time(event.get("captured_at")))
+        declared_goal = None
+        if focus:
+            declared_goal = {"goal_id": str(focus.get("goal_id") or ""), "statement": str(focus.get("statement") or "")}
+            related_goal = declared_goal["statement"] or related_goal
+            supports_mainline = "declared"
+            reason = "declared"
+            if "core_problem" not in auto_labels:
+                auto_labels = [label for label in RUBRIC if label in set(auto_labels + ["core_problem"])]
+            reinforcement[declared_goal["goal_id"] or declared_goal["statement"]] += 1
+        else:
+            for signal in result["goal_signals"]:
+                reinforcement[signal.get("goal_id") or signal.get("statement") or ""] += 1
         review_state = "unreviewed"
         allocated_to = auto_labels
         correction = corrections.get(event_id)
         if correction:
             allocated_to = correction["labels"]
             review_state = "corrected"
-        for signal in result["goal_signals"]:
-            reinforcement[signal.get("goal_id") or signal.get("statement") or ""] += 1
+        receipt = {
+            "event_id": event_id,
+            "source_event": f"{event.get('hook_event_name') or 'unknown'}/{event.get('tool_name') or event.get('hook_event_name') or 'unknown'}",
+            "reason": reason,
+            "matched_patterns": result["matched_patterns"],
+            "goal_signals": result["goal_signals"],
+            "auto_labels": auto_labels,
+            "auto_confidence": round(result["confidence"], 2),
+        }
+        if declared_goal:
+            receipt["declared_goal"] = declared_goal
         entry = {
             "schema_version": 1,
             "timestamp": event.get("captured_at") or utc_now(),
@@ -997,21 +1097,12 @@ def build_ledger(root: Path, since_value: str, base: str | None = None) -> dict[
             "source": event.get("hook_event_name") or "unknown",
             "resource_type": event.get("tool_name") or event.get("hook_event_name") or "unknown",
             "allocated_to": allocated_to,
-            "related_goal": result["related_goal"],
-            "supports_mainline": result["supports_mainline"],
+            "related_goal": related_goal,
+            "supports_mainline": supports_mainline,
             "confidence": round(result["confidence"], 2),
             "ambiguity": result["ambiguity"],
             "review_state": review_state,
-            # The receipt is the evidence trail: why this label, from what.
-            "receipt": {
-                "event_id": event_id,
-                "source_event": f"{event.get('hook_event_name') or 'unknown'}/{event.get('tool_name') or event.get('hook_event_name') or 'unknown'}",
-                "reason": result["reason"],
-                "matched_patterns": result["matched_patterns"],
-                "goal_signals": result["goal_signals"],
-                "auto_labels": auto_labels,
-                "auto_confidence": round(result["confidence"], 2),
-            },
+            "receipt": receipt,
         }
         if correction:
             entry["correction"] = {
@@ -1037,6 +1128,12 @@ def build_ledger(root: Path, since_value: str, base: str | None = None) -> dict[
     low_confidence_entries = sum(
         1 for entry in entries if entry["review_state"] != "corrected" and entry["confidence"] < 0.5
     )
+    # Declared (ground-truth intent) vs inferred (keyword-guessed) — the honest
+    # measure of how much of the allocation is still a guess.
+    declared_entries = sum(1 for entry in entries if entry["supports_mainline"] == "declared")
+    inferred_entries = sum(
+        1 for entry in entries if entry["supports_mainline"] != "declared" and entry["allocated_to"] != ["noise"]
+    )
     coverage = {
         "trace_events": trace_event_count,
         "git_commits": git_commit_count,
@@ -1044,6 +1141,8 @@ def build_ledger(root: Path, since_value: str, base: str | None = None) -> dict[
         "low_signal_entries": low_signal_entries,
         "low_confidence_entries": low_confidence_entries,
         "corrected_entries": corrected_entries,
+        "declared_entries": declared_entries,
+        "inferred_entries": inferred_entries,
         "not_captured": [
             "Decisions or reasoning that happened only in chat, not as tool calls.",
             "Work done outside Claude Code or outside this repository.",
@@ -1105,6 +1204,8 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
         f"- Entries with no rubric or goal signal (could not classify): {coverage.get('low_signal_entries', 0)}",
         f"- Entries below 0.5 confidence: {coverage.get('low_confidence_entries', 0)}",
         f"- Human-corrected entries: {coverage.get('corrected_entries', 0)}",
+        f"- Declared intent (ground truth): {coverage.get('declared_entries', 0)}; "
+        f"keyword-inferred (rough): {coverage.get('inferred_entries', 0)}",
         "",
         "Not captured by StillMirror:",
     ]
@@ -1829,6 +1930,11 @@ def main() -> int:
     aggregate = sub.add_parser("aggregate")
     aggregate.add_argument("paths", nargs="+", help="maintainer-review.json sidecars or directories of them")
     aggregate.add_argument("--out-dir", default="")
+    focus = sub.add_parser("focus")
+    focus.add_argument("ref", nargs="?", default="", help="goal reference or new statement to declare as current intent")
+    focus.add_argument("--note", default="")
+    focus.add_argument("--clear", action="store_true", help="end the current focus (events after are undeclared)")
+    focus.add_argument("--list", action="store_true", dest="list_focus")
     goals = sub.add_parser("goals")
     goals_sub = goals.add_subparsers(dest="goals_command")
     goals_add = goals_sub.add_parser("add")
@@ -1887,6 +1993,14 @@ def main() -> int:
     elif args.command == "aggregate":
         result = aggregate_reviews(args.paths, args.out_dir)
         print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "focus":
+        if args.list_focus:
+            print(json.dumps({"focus": list_focus(root)}, ensure_ascii=False, indent=2))
+        elif args.clear:
+            print(json.dumps({"cleared": clear_focus(root)}, ensure_ascii=False, indent=2))
+        else:
+            record = set_focus(root, args.ref, args.note)
+            print(json.dumps({"focus": record, "output": str(focus_path(root))}, ensure_ascii=False, indent=2))
     elif args.command == "goals":
         if args.goals_command == "add":
             goal = add_goal(root, args.statement, args.source, args.scope, args.review_state)

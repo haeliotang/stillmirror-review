@@ -584,6 +584,31 @@ class StillMirrorPluginTests(unittest.TestCase):
             self.assertTrue(responses[5]["result"]["isError"])
             self.assertIn("attested_by", responses[5]["result"]["content"][0]["text"])
 
+    def test_focus_declares_ground_truth_linkage_over_keyword_guess(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.run_script(project, "goals", "add", "ship the adapter")
+            self.run_script(project, "focus", "ship the adapter")
+            # An event whose text does NOT keyword-match the goal — the classifier
+            # alone would leave it unlinked; the declaration gives ground truth.
+            self.capture(project, {"hook_event_name": "PostToolUse", "cwd": str(project), "session_id": "a",
+                                   "tool_name": "Read", "tool_input": {"file_path": "notes.md"}})
+            self.run_script(project, "ledger", "--since", "30d")
+            ledger = self.load_ledger(project)
+            entry = next(e for e in ledger["entries"] if e["source"] == "PostToolUse")
+            self.assertIn("core_problem", entry["allocated_to"])
+            self.assertEqual(entry["supports_mainline"], "declared")
+            self.assertEqual(entry["related_goal"], "ship the adapter")
+            self.assertEqual(entry["receipt"]["reason"], "declared")
+            self.assertGreaterEqual(ledger["coverage"]["declared_entries"], 1)
+            # Clearing the focus returns subsequent events to inferred.
+            self.run_script(project, "focus", "--clear")
+            self.capture(project, {"hook_event_name": "PostToolUse", "cwd": str(project), "session_id": "a",
+                                   "tool_name": "Read", "tool_input": {"file_path": "other.md"}})
+            self.run_script(project, "ledger", "--since", "30d")
+            ledger2 = self.load_ledger(project)
+            self.assertGreaterEqual(ledger2["coverage"]["inferred_entries"], 1)
+
     def test_task_lifecycle_events_are_captured_as_control_events(self) -> None:
         # TaskCreated / TaskCompleted are real Claude Code hooks (confirmed by the
         # project's own self-review, which caught them being dropped). Capture them

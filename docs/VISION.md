@@ -138,6 +138,20 @@ honest:
   provenance ⋈ allocation evidence ⋈ human attestation), dead code trimmed
   (unused `init` dirs, a dead profile field), and our own attestation dogfooded
   (signed-off commits + a recorded alignment). The discipline applied to itself.
+- **v0.8 — Root out the classifier: declare, don't guess** *(shipped)*. The
+  weakest link since day one — keyword inference over impoverished metadata
+  (61% of work "unlinked"). Pressure-tested against the multi-agent future (most
+  people will hand decisions to AI or a reviewer-AI), the fix is not a *smarter
+  guesser* but a move from inference to **declaration**: `focus` lets the worker
+  (a human, or an agent) declare which goal the current work serves, so
+  allocation becomes ground-truth (`supports_mainline: declared`), overriding the
+  keyword guess. The rule classifier stays as the transparent fallback for
+  *undeclared* work, and coverage reports the **declared-vs-inferred** split
+  honestly. StillMirror is thereby positioned as the **auditable evidence
+  substrate** — consumable by a human today or a reviewer-AI tomorrow, with the
+  accountable attestation as terminus. **Non-goals:** an opaque LLM that renders
+  the verdict. **Deferred:** per-agent/per-session focus (v0.8 is a global
+  time-window; concurrent-agent attribution is the multi-agent extension).
 - **v1.0 — Objective provenance-lite for agentic projects.**
 - **Deferred** — research / writing drift review.
 

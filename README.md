@@ -26,8 +26,11 @@ Alignment is user review, not a system verdict.
 
 One loop, one story — **what you meant ⋈ what happened ⋈ who stood behind it**:
 
-- **Provenance of intent** — `problem set`, `goals add/retire/replace/events`:
-  what you accepted as the goal, and how it changed over time.
+- **Provenance of intent** — `problem set`, `goals add/retire/replace/events`,
+  and **`focus`**: what you accepted as the goal, how it changed, and **what
+  you're working on right now**. `focus` declares intent so allocation is
+  ground-truth, not a keyword guess — and in a multi-agent run, an agent can
+  declare its own focus.
 - **Evidence of allocation** — hook capture → `ledger` → `review`: where agent
   work actually went, each entry carrying a receipt and honest coverage/blind
   spots.
@@ -61,7 +64,7 @@ claude plugin details stillmirror-review
 Expected shape:
 
 ```text
-stillmirror-review 0.7.0
+stillmirror-review 0.8.0
   The review layer for agentic work. Joins accepted-goal provenance with
   allocation evidence for user alignment review.
   Source: stillmirror-review@stillmirror
@@ -131,6 +134,8 @@ You can also run the bundled helper directly:
 plugins/stillmirror-review/bin/stillmirror-review init
 plugins/stillmirror-review/bin/stillmirror-review problem set "Validate StillMirror as a review layer"
 plugins/stillmirror-review/bin/stillmirror-review goals add "Maintain hook reliability"
+plugins/stillmirror-review/bin/stillmirror-review focus "Maintain hook reliability"   # declare current intent
+plugins/stillmirror-review/bin/stillmirror-review focus --clear
 plugins/stillmirror-review/bin/stillmirror-review goals replace "Maintain hook reliability" --with "Ship a trustworthy review layer"
 plugins/stillmirror-review/bin/stillmirror-review goals retire "<goal id or statement>"
 plugins/stillmirror-review/bin/stillmirror-review goals events

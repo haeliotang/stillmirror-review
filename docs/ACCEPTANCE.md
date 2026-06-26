@@ -21,6 +21,10 @@ Functional gates:
   `replace` append `goal_introduced`/`goal_retired`/`goal_replaced` events to
   `goals/goal-events.jsonl`.
 - `problem set` writes `problems/mainline-hypothesis.json`.
+- `focus "<goal>"` declares current intent; events in the focus window get
+  ground-truth linkage (`supports_mainline: "declared"`, `core_problem`,
+  `receipt.reason: "declared"`) overriding the keyword guess, and `focus --clear`
+  ends it. `ledger` coverage reports the declared-vs-inferred split.
 - `review` emits a Markdown **Project Alignment Review** with Coverage & Blind
   Spots, Goal Provenance, and **Triage** sections, and no drift scores or
   verdicts.
