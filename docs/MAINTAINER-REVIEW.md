@@ -67,9 +67,11 @@ Classification prefers, in order: the conventional-commit prefix (`feat:`,
 `fix:`, `chore:`, `docs:`, …); then the **changed file paths** — what actually
 changed, which is more truthful than the subject's claim and agnostic to whoever
 (human or agent) wrote the message (e.g. a commit touching only `docs/` → docs,
-only `.github/` → infra); then whole-word subject keywords. Genuinely ambiguous
-commits (e.g. a code change with a vague subject) stay `other` rather than being
-force-fit into a bucket.
+only `.github/` → infra); then, for commits that span categories, the **bulk of
+the diff** by changed lines (e.g. 1 line of code + 200 of docs → docs). Diffs are
+read *to classify* — the line counts are used and discarded, **never reported as
+a metric** (no LOC). Genuinely ambiguous commits (a code change with a vague
+subject) stay `other` rather than being force-fit.
 
 ## Authorship & accountability
 
@@ -149,7 +151,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }       # full history for the review window
-      - uses: haeliotang/stillmirror-review/.github/actions/maintainer-review@stillmirror-review--v0.4.0
+      - uses: haeliotang/stillmirror-review/.github/actions/maintainer-review@stillmirror-review--v0.4.1
         with:
           since: "90d"
           publish-badge: "true"

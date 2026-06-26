@@ -96,11 +96,16 @@ honest:
   human-boundary SessionStart nudge (opt-in) and a PR-time `--base` review;
   triage aggregation (by goal, by agent thread, surfaced exceptions) in the
   review. See [TRIGGERS.md](TRIGGERS.md).
-- **v0.4 — Evidence breadth** *(in progress)*: opt-in PR/issue ingestion via
-  `gh` (shipped), and **Review Debt** as a first-class metric — agent work
-  authorized but not yet stood behind, measured against the last human-attested
-  review (the edge-era "budget" is human attention). *Still deferred:*
-  session-to-session comparison and deltas (to avoid trend / verdict creep).
+- **v0.4 — Evidence breadth** *(shipped)*: **diff ingestion** (changed lines
+  read *to classify* mixed commits by the bulk of the change — never reported as
+  LOC), opt-in **PR/issue ingestion** via `gh` (merged/closed + open backlog,
+  project-level), and **Review Debt** — agent work authorized but not yet stood
+  behind, measured against the last human-attested review (the edge-era "budget"
+  is human attention). **Non-goals, refused on principle (not deferred):** LOC /
+  change-volume as a *reported metric*; PR/issue *thread content* and
+  *per-responder* breakdowns (ranking risk); and session-to-session **trend /
+  score deltas** — the only safe "since last review" delta is Review Debt
+  (evidence counts, no trend line, no better/worse).
 - **Parallel — Open-source Maintainer Review (wedge)** *(v0 shipped)*: the
   `maintainer-review` command — capture-free, git-only, landing as a committable
   **badge + report** with a canonical sidecar — plus a **composite GitHub Action**

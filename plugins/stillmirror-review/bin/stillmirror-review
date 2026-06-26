@@ -1346,7 +1346,7 @@ def git_commit_files(root: Path, since: dt.datetime, base_range: str = "") -> li
     fmt = "%x1e%H%x1f%s%x1f%an%x1f%ae%x1f%G?%x1f%(trailers:key=Signed-off-by,valueonly,separator=%x20)"
     try:
         raw = subprocess.run(
-            ["git", "-C", str(root), "log", *selector, "--no-merges", "--name-only", f"--format={fmt}"],
+            ["git", "-C", str(root), "log", *selector, "--no-merges", "--no-renames", "--numstat", f"--format={fmt}"],
             check=True, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
         ).stdout
     except Exception:
@@ -1357,6 +1357,19 @@ def git_commit_files(root: Path, since: dt.datetime, base_range: str = "") -> li
             continue
         lines = chunk.split("\n")
         head = lines[0].split("\x1f")
+        files: list[str] = []
+        # Diffs are read (added+deleted lines per file) purely to classify mixed
+        # commits more truthfully — never reported as a line count or LOC metric.
+        weights: dict[str, int] = {}
+        for line in lines[1:]:
+            if not line.strip():
+                continue
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            added, deleted, path = parts[0], parts[1], parts[2]
+            files.append(path)
+            weights[path] = (int(added) if added.isdigit() else 0) + (int(deleted) if deleted.isdigit() else 0)
         commits.append(
             {
                 "commit": head[0] if head else "",
@@ -1365,7 +1378,8 @@ def git_commit_files(root: Path, since: dt.datetime, base_range: str = "") -> li
                 "author_email": head[3] if len(head) > 3 else "",
                 "signature": head[4] if len(head) > 4 else "",
                 "signoff": head[5] if len(head) > 5 else "",
-                "files": [line for line in lines[1:] if line.strip()],
+                "files": files,
+                "file_weights": weights,
             }
         )
     return commits
@@ -1390,30 +1404,55 @@ def gh_pr_issue_activity(root: Path, since: dt.datetime) -> dict[str, Any] | Non
     try:
         prs = gh_json(["pr", "list", "--state", "merged", "--limit", "500", "--json", "mergedAt"])
         issues = gh_json(["issue", "list", "--state", "closed", "--limit", "500", "--json", "closedAt"])
+        open_prs = gh_json(["pr", "list", "--state", "open", "--limit", "500", "--json", "number"])
+        open_issues = gh_json(["issue", "list", "--state", "open", "--limit", "500", "--json", "number"])
     except Exception:
         return None
     merged = sum(1 for pr in prs if (parse_time(pr.get("mergedAt")) or epoch) >= since)
     closed = sum(1 for issue in issues if (parse_time(issue.get("closedAt")) or epoch) >= since)
-    return {"merged_prs": merged, "closed_issues": closed}
+    return {
+        "merged_prs": merged,
+        "closed_issues": closed,
+        "open_prs": len(open_prs),
+        "open_issues": len(open_issues),
+    }
 
 
-def classify_commit(subject: str, files: list[str] | None = None) -> dict[str, Any]:
+def classify_commit(subject: str, files: list[str] | None = None, file_weights: dict[str, int] | None = None) -> dict[str, Any]:
     """Classify a commit into a maintainer label + its canonical class.
 
     Priority: conventional-commit prefix (structured author intent) -> changed
-    files (what actually changed, when they all agree on one non-code category)
-    -> whole-word subject keywords -> other. ``other`` stays honest: ambiguous
-    code commits with vague subjects are not force-fit into a bucket.
+    files (all agree on one non-code category) -> the *bulk of the diff* by
+    changed lines when files span categories (diffs are read to classify, never
+    reported as a line count) -> whole-word subject keywords -> other. ``other``
+    stays honest: ambiguous code commits with vague subjects are not force-fit.
     """
+    files = files or []
     text = subject.casefold()
     match = re.match(r"\s*([a-z]+)(\([^)]*\))?!?:", text)
     if match and match.group(1) in CONVENTIONAL_COMMIT:
         label = CONVENTIONAL_COMMIT[match.group(1)]
         return {"label": label, "canonical": MAINTAINER_PROFILE[label]["canonical"], "reason": f"conventional:{match.group(1)}"}
-    file_labels = [file_label(path) for path in (files or [])]
+    file_labels = [file_label(path) for path in files]
     if file_labels and all(file_labels) and len(set(file_labels)) == 1:
         label = file_labels[0]
         return {"label": label, "canonical": MAINTAINER_PROFILE[label]["canonical"], "reason": "files"}
+    # Mixed file categories: let the bulk of the actual change decide, when one
+    # non-code category holds the majority of changed lines. The line counts are
+    # used here and discarded — they are never surfaced as a metric.
+    if file_weights:
+        category_lines: dict[str, int] = {}
+        total_lines = 0
+        for path in files:
+            label = file_label(path)
+            weight = file_weights.get(path, 0)
+            total_lines += weight
+            if label:
+                category_lines[label] = category_lines.get(label, 0) + weight
+        if category_lines and total_lines > 0:
+            top = max(category_lines, key=category_lines.get)
+            if category_lines[top] / total_lines >= 0.6:
+                return {"label": top, "canonical": MAINTAINER_PROFILE[top]["canonical"], "reason": "diff"}
     for label, spec in MAINTAINER_PROFILE.items():
         if label == "other":
             continue
@@ -1451,7 +1490,7 @@ def maintainer_review(root: Path, since_value: str, base: str | None = None, out
     for commit in commits:
         subject = str(commit.get("subject") or "")
         files = commit.get("files") or []
-        result = classify_commit(subject, files)
+        result = classify_commit(subject, files, commit.get("file_weights"))
         name = str(commit.get("author_name") or "")
         tier = attestation_tier(
             name, str(commit.get("author_email") or ""),
@@ -1524,7 +1563,10 @@ def maintainer_review(root: Path, since_value: str, base: str | None = None, out
         if pr_issue is not None:
             lines.append(f"- Merged PRs in window: {pr_issue['merged_prs']}")
             lines.append(f"- Closed issues in window: {pr_issue['closed_issues']}")
-            lines.append("- Partially fills the `triage_responding` blind spot above.")
+            lines.append(f"- Open PRs (backlog): {pr_issue['open_prs']}")
+            lines.append(f"- Open issues (backlog): {pr_issue['open_issues']}")
+            lines.append("- Partially fills the `triage_responding` blind spot above; thread")
+            lines.append("  content and per-responder detail are out of scope (ranking risk).")
         else:
             lines.append("- `gh` unavailable or repo not on GitHub — `triage_responding` remains a git-only blind spot.")
     lines.extend(

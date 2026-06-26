@@ -414,6 +414,32 @@ class StillMirrorPluginTests(unittest.TestCase):
             self.assertIn("feature", badge["message"])
             self.assertIn("upkeep", badge["message"])  # answers the maintainer's core question
 
+    def test_classifies_mixed_commit_by_diff_bulk_without_reporting_loc(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+
+            def git(*args: str) -> None:
+                subprocess.run(["git", "-C", str(project), *args], check=True, capture_output=True, text=True)
+
+            git("init")
+            git("config", "user.email", "t@t.co")
+            git("config", "user.name", "t")
+            (project / "docs").mkdir()
+            (project / "app.py").write_text("x = 1\n")  # 1 code line
+            (project / "docs" / "guide.md").write_text("\n".join(f"line {i}" for i in range(12)) + "\n")  # docs bulk
+            git("add", "-A")
+            git("commit", "-m", "update stuff")  # vague subject, mixed files, docs dominates the diff
+
+            result = json.loads(self.run_script(project, "maintainer-review", "--since", "365d").stdout)
+            sidecar = json.loads(Path(result["sidecar"]).read_text())
+            entry = next(e for e in sidecar["entries"] if e["subject"] == "update stuff")
+            self.assertEqual(entry["label"], "docs")
+            self.assertEqual(entry["reason"], "diff")  # decided by the bulk of the change
+            # Diffs are read to classify, never reported as a line count / LOC metric.
+            self.assertNotIn("lines", entry)
+            self.assertNotIn("loc", entry)
+            self.assertNotIn("lines changed", Path(result["report"]).read_text().casefold())
+
     def test_maintainer_review_surfaces_attestation(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             project = Path(temp)

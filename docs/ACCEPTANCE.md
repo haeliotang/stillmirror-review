@@ -46,8 +46,11 @@ Functional gates:
   signature-not-verified blind spot.
 - `review` includes a **Review Debt** section (unreviewed allocations / goal
   events / agent threads since the last human-attested review).
-- `maintainer-review --with-pr-issues` enriches via `gh` and degrades gracefully
-  to git-only when `gh` is unavailable.
+- `maintainer-review` reads diffs (changed lines) only to classify mixed commits
+  by the bulk of the change (`reason: "diff"`); no line count / LOC is ever
+  reported as a metric.
+- `maintainer-review --with-pr-issues` enriches via `gh` (merged/closed + open
+  backlog) and degrades gracefully to git-only when `gh` is unavailable.
 - `aggregate` produces an anonymized cross-repo report that names no project or
   contributor.
 - redacted sample contains no private paths, raw prompts, or transcript payloads.
