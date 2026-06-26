@@ -608,6 +608,33 @@ def last_attestation(root: Path) -> dict[str, Any] | None:
     return chosen[-1] if chosen else None
 
 
+def fleet_review_debt(entries: list[dict[str, Any]], reference: dt.datetime) -> dict[str, Any]:
+    """Map the unpaid-review pile across agent threads.
+
+    Ledger entries after the last human attestation that are not ``corrected``
+    and carry a non-``noise`` label, aggregated **by problem** and **by thread**.
+    This is evidence about the review *you* owe the fleet's output — never a
+    measure of any agent's work, cost, or rank.
+    """
+    by_problem: Counter[str] = Counter()
+    by_thread: Counter[str] = Counter()
+    owed = 0
+    for entry in entries:
+        if entry.get("review_state") == "corrected":
+            continue
+        when = parse_time(entry.get("timestamp"))
+        if when is None or when <= reference:
+            continue
+        labels = [label for label in (entry.get("allocated_to") or []) if label != "noise"]
+        if not labels:
+            continue
+        owed += 1
+        for label in labels:
+            by_problem[label] += 1
+        by_thread[entry.get("session") or "(non-session: git/other)"] += 1
+    return {"owed": owed, "by_problem": by_problem, "by_thread": by_thread}
+
+
 def event_text(event: dict[str, Any]) -> str:
     pieces = [
         str(event.get("hook_event_name") or ""),
@@ -1100,6 +1127,11 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
     # *human-attested* review (not the last automated anything).
     debt = compute_review_due(root, nudge_threshold(None))
     last_att = last_attestation(root)
+    attest_reference = parse_time(last_att.get("recorded_at")) if last_att else None
+    fleet = fleet_review_debt(
+        ledger.get("entries") or [],
+        attest_reference or dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc),
+    )
     if last_att:
         attested_line = (
             f"- Last attested review: {str(last_att.get('recorded_at', ''))[:10]} "
@@ -1121,6 +1153,28 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
             f"- Agent threads (sessions) since: {debt['sessions_touched']}",
         ]
     )
+    if fleet["owed"] > 0:
+        lines.extend(["", "Where your review is owed (by problem):"])
+        for label in RUBRIC:
+            count = fleet["by_problem"].get(label, 0)
+            if count:
+                lines.append(f"- {label}: {count}")
+        lines.extend(["", "Threads with the most unattended output (where to look — not a ranking):"])
+        top = fleet["by_thread"].most_common(5)
+        for thread, count in top:
+            short = thread[:8] if thread and not thread.startswith("(") else thread
+            lines.append(f"- thread {short}: {count}")
+        remaining = len(fleet["by_thread"]) - len(top)
+        if remaining > 0:
+            lines.append(f"  (+{remaining} more threads)")
+        lines.extend(
+            [
+                "",
+                "_This is your unpaid review attention — by problem and by thread. It is",
+                "evidence about what you owe the fleet's output, never a measure of any",
+                "agent's work, cost, or rank._",
+            ]
+        )
 
     lines.extend(
         [

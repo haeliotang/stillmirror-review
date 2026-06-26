@@ -45,7 +45,9 @@ Functional gates:
   with per-commit attestation tiers, as composition not a ranking, and names the
   signature-not-verified blind spot.
 - `review` includes a **Review Debt** section (unreviewed allocations / goal
-  events / agent threads since the last human-attested review).
+  events / agent threads since the last human-attested review); for multi-agent
+  work it maps the unreviewed pile by problem and by thread (evidence about owed
+  attention, not a ranking) and clears after a human attestation.
 - `maintainer-review` reads diffs (changed lines) only to classify mixed commits
   by the bulk of the change (`reason: "diff"`); no line count / LOC is ever
   reported as a metric.

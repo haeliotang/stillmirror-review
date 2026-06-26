@@ -493,6 +493,29 @@ class StillMirrorPluginTests(unittest.TestCase):
             self.run_script(project, "review", "--since", "30d")
             self.assertIn("by Hao", review_file.read_text())
 
+    def test_review_debt_maps_fleet_by_problem_and_thread_and_resets(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.capture(project, {"hook_event_name": "PostToolUse", "cwd": str(project), "session_id": "agentA",
+                                   "tool_name": "Edit", "tool_input": {"file_path": "x.py", "description": "add review ledger feature"}})
+            self.capture(project, {"hook_event_name": "PostToolUse", "cwd": str(project), "session_id": "agentB",
+                                   "tool_name": "Read", "tool_input": {"file_path": "notes.md"}})
+            self.capture(project, {"hook_event_name": "PostToolUse", "cwd": str(project), "session_id": "agentB",
+                                   "tool_name": "Bash", "tool_input": {"command": "explore", "description": "explore prototype spike"}})
+            self.run_script(project, "review", "--since", "30d")
+            review_file = next((project / ".stillmirror" / "reviews").glob("*-project-alignment-review.md"))
+            debt = review_file.read_text().split("## Review Debt", 1)[1].split("## Mainline", 1)[0]
+            self.assertIn("Where your review is owed (by problem)", debt)
+            self.assertIn("Threads with the most unattended output", debt)
+            self.assertGreaterEqual(debt.count("- thread "), 2)  # aggregated across agent threads
+            self.assertIn("never a measure of any", debt)  # evidence, not a ranking
+            self.assertNotIn("score", debt.casefold())
+            self.assertNotIn("best", debt.casefold())
+            # A human attestation clears the owed pile (entries before it are excluded).
+            self.run_script(project, "alignment", "record", "--label", "necessary_support", "--attested-by", "Hao")
+            self.run_script(project, "review", "--since", "30d")
+            self.assertNotIn("Where your review is owed", review_file.read_text())
+
     def test_maintainer_review_pr_issues_degrades_gracefully(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             project = Path(temp)

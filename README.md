@@ -40,7 +40,7 @@ claude plugin details stillmirror-review
 Expected shape:
 
 ```text
-stillmirror-review 0.5.0
+stillmirror-review 0.6.0
   The review layer for agentic work. Joins accepted-goal provenance with
   allocation evidence for user alignment review.
   Source: stillmirror-review@stillmirror
@@ -125,7 +125,9 @@ plugins/stillmirror-review/bin/stillmirror-review alignment record --label neces
 ```
 
 The review now also reports **Review Debt** — agent work you authorized but have
-not yet stood behind, measured against your last human-attested review.
+not yet stood behind, measured against your last human-attested review. For
+multi-agent work it maps that unreviewed pile **by problem and by thread** (a
+fleet review-debt map — where your attention is owed, never a ranking of agents).
 
 ## Maintainer review (the wedge)
 

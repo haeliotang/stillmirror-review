@@ -125,7 +125,12 @@ honest:
   floor is enforced at the tool boundary: it surfaces evidence and records the
   user's own attestation, and refuses to attest on the human's behalf. See
   [MCP-ADAPTER.md](MCP-ADAPTER.md).
-- **v0.6 — Multi-agent budget *view***: a view on the same spine, not a pillar.
+- **v0.6 — Multi-agent budget *view*** *(shipped)*: budget reframed from *cost
+  spent* to **attention owed**. The Review Debt section maps the fleet's
+  unreviewed allocation **by problem** and surfaces the threads with the most
+  unattended output (where to look, not a ranking). A view on the spine, not a
+  pillar. **Non-goals (refused):** token / cost capture, and any per-agent
+  efficiency, quality, or "best/worst" ranking.
 - **v1.0 — Objective provenance-lite for agentic projects.**
 - **Deferred** — research / writing drift review.
 
