@@ -40,15 +40,15 @@ claude plugin details stillmirror-review
 Expected shape:
 
 ```text
-stillmirror-review 0.4.1
+stillmirror-review 0.4.2
   The review layer for agentic work. Joins accepted-goal provenance with
   allocation evidence for user alignment review.
   Source: stillmirror-review@stillmirror
 
 Component inventory
   Skills (4)  goals, init, ledger, review
-  Hooks (6)  SessionStart, UserPromptSubmit, PostToolUse, SubagentStop,
-             Stop, SessionEnd
+  Hooks (8)  SessionStart, UserPromptSubmit, PostToolUse, SubagentStop,
+             TaskCreated, TaskCompleted, Stop, SessionEnd
   MCP servers (0)
 ```
 

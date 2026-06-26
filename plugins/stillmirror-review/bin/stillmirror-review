@@ -116,6 +116,8 @@ LIFECYCLE_EVENTS = {
     "SessionEnd",
     "Stop",
     "SubagentStop",
+    "TaskCreated",
+    "TaskCompleted",
     "Notification",
     "PreCompact",
 }

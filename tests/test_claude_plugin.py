@@ -533,6 +533,21 @@ class StillMirrorPluginTests(unittest.TestCase):
             self.assertNotIn("SecretContributor", blob)  # names no contributor
             self.assertIn("anonymized", blob.casefold())
 
+    def test_task_lifecycle_events_are_captured_as_control_events(self) -> None:
+        # TaskCreated / TaskCompleted are real Claude Code hooks (confirmed by the
+        # project's own self-review, which caught them being dropped). Capture them
+        # and confirm they are treated as control events, not polluted into
+        # exploration.
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            for name in ("TaskCreated", "TaskCompleted"):
+                self.capture(project, {"hook_event_name": name, "cwd": str(project), "session_id": "s"})
+            self.run_script(project, "ledger", "--since", "30d")
+            entries = [e for e in self.load_ledger(project)["entries"] if e["source"] in ("TaskCreated", "TaskCompleted")]
+            self.assertEqual(len(entries), 2)
+            for entry in entries:
+                self.assertEqual(entry["allocated_to"], ["noise"])
+
     def test_publish_badge_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
