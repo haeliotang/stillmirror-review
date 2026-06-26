@@ -1,0 +1,61 @@
+name: "StillMirror Maintainer Review"
+description: "Capture-free, git-only maintainer review: refresh a committable badge + a job summary. Evidence, not verdict."
+branding:
+  icon: "git-commit"
+  color: "blue"
+inputs:
+  since:
+    description: "Time window (e.g. 90d) for the review."
+    default: "90d"
+  base:
+    description: "Optional git ref; scope to commits since merge-base(<ref>, HEAD) for a PR."
+    default: ""
+  badge-branch:
+    description: "Orphan branch the badge JSON is published to."
+    default: "stillmirror-badges"
+  publish-badge:
+    description: "Publish the badge to badge-branch (needs contents: write). Set 'false' for a summary-only run."
+    default: "true"
+  out-dir:
+    description: "Where the report/badge are written on the runner (defaults to a temp dir)."
+    default: ""
+outputs:
+  report-path:
+    description: "Path to the generated maintainer review markdown."
+    value: ${{ steps.run.outputs.report }}
+  badge-endpoint-url:
+    description: "Shields.io endpoint URL for the published badge."
+    value: ${{ steps.run.outputs.badge_endpoint_url }}
+runs:
+  using: "composite"
+  steps:
+    - id: run
+      shell: bash
+      env:
+        SM_SINCE: ${{ inputs.since }}
+        SM_BASE: ${{ inputs.base }}
+        SM_BRANCH: ${{ inputs.badge-branch }}
+        SM_PUBLISH: ${{ inputs.publish-badge }}
+        SM_OUTDIR: ${{ inputs.out-dir }}
+        SM_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        OUT="${SM_OUTDIR:-}"
+        if [ -z "$OUT" ]; then OUT="${RUNNER_TEMP:-/tmp}/stillmirror"; fi
+        CLI="$SM_ACTION_PATH/../../../plugins/stillmirror-review/bin/stillmirror-review"
+        BASE_ARG=()
+        if [ -n "$SM_BASE" ]; then BASE_ARG=(--base "$SM_BASE"); fi
+        python3 "$CLI" maintainer-review --since "$SM_SINCE" "${BASE_ARG[@]}" --out-dir "$OUT"
+        REPORT="$(ls -t "$OUT"/*-maintainer-review.md | head -1)"
+        echo "report=$REPORT" >> "$GITHUB_OUTPUT"
+        {
+          echo "## StillMirror Maintainer Review"
+          echo
+          cat "$REPORT"
+        } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+        RAW="${GITHUB_SERVER_URL:-https://github.com}"
+        RAW="${RAW/github.com/raw.githubusercontent.com}"
+        echo "badge_endpoint_url=https://img.shields.io/endpoint?url=${RAW}/${GITHUB_REPOSITORY:-OWNER/REPO}/${SM_BRANCH}/maintainer-badge.json" >> "$GITHUB_OUTPUT"
+        if [ "$SM_PUBLISH" = "true" ]; then
+          bash "$SM_ACTION_PATH/publish-badge.sh" "$OUT/maintainer-badge.json" "$SM_BRANCH"
+        fi

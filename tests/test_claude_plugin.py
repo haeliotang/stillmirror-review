@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "plugins" / "stillmirror-review"
 CAPTURE = PLUGIN / "bin" / "stillmirror-capture"
 REVIEW = PLUGIN / "bin" / "stillmirror-review"
+ACTION_DIR = ROOT / ".github" / "actions" / "maintainer-review"
+PUBLISH_BADGE = ACTION_DIR / "publish-badge.sh"
 
 
 class StillMirrorPluginTests(unittest.TestCase):
@@ -378,6 +380,68 @@ class StillMirrorPluginTests(unittest.TestCase):
             self.assertIn("pull-request", report)  # coverage names the blind spot
             self.assertIn("triage_responding", report)
             self.assertNotIn("drowning", report.casefold())  # no verdict language
+
+    def test_publish_badge_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            remote = base / "remote.git"
+            work = base / "work"
+
+            def git(cwd: Path, *args: str) -> None:
+                subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True)
+
+            subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True, capture_output=True, text=True)
+            subprocess.run(["git", "clone", "-q", str(remote), str(work)], check=True, capture_output=True, text=True)
+            git(work, "config", "user.email", "t@t.co")
+            git(work, "config", "user.name", "t")
+            git(work, "commit", "--allow-empty", "-q", "-m", "init")
+            git(work, "push", "-q", "origin", "HEAD")
+
+            badge = base / "badge.json"
+            badge.write_text('{"schemaVersion":1,"label":"work","message":"feature 40%","color":"blue"}\n')
+
+            def publish() -> None:
+                subprocess.run(
+                    ["bash", str(PUBLISH_BADGE), str(badge), "stillmirror-badges", "origin"],
+                    cwd=work, check=True, capture_output=True, text=True,
+                )
+
+            def branch_commits() -> int:
+                out = subprocess.run(
+                    ["git", "-C", str(remote), "rev-list", "--count", "stillmirror-badges"],
+                    check=True, capture_output=True, text=True,
+                ).stdout.strip()
+                return int(out)
+
+            publish()
+            self.assertEqual(branch_commits(), 1)  # orphan branch created with the badge
+            published = subprocess.run(
+                ["git", "-C", str(remote), "show", "stillmirror-badges:maintainer-badge.json"],
+                check=True, capture_output=True, text=True,
+            ).stdout
+            self.assertIn("feature 40%", published)
+
+            publish()  # unchanged
+            self.assertEqual(branch_commits(), 1)  # no empty-commit noise
+
+            badge.write_text('{"schemaVersion":1,"label":"work","message":"feature 55%","color":"blue"}\n')
+            publish()
+            self.assertEqual(branch_commits(), 2)  # changed badge -> new commit
+
+    def test_action_and_workflows_wiring(self) -> None:
+        action = (ACTION_DIR / "action.yml").read_text()
+        self.assertIn('using: "composite"', action)
+        self.assertIn("maintainer-review", action)
+        self.assertIn("publish-badge.sh", action)
+        badge_wf = (ROOT / ".github" / "workflows" / "stillmirror-badge.yml").read_text()
+        self.assertIn("contents: write", badge_wf)
+        self.assertIn("./.github/actions/maintainer-review", badge_wf)
+        pr_wf = (ROOT / ".github" / "workflows" / "stillmirror-pr.yml").read_text()
+        self.assertIn("contents: read", pr_wf)
+        self.assertIn('publish-badge: "false"', pr_wf)
+        # v1 posts no PR comment: no issue/PR write surface.
+        self.assertNotIn("issues: write", pr_wf)
+        self.assertNotIn("pull-requests: write", pr_wf)
 
 
 if __name__ == "__main__":

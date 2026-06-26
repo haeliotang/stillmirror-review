@@ -1,0 +1,22 @@
+name: StillMirror PR summary
+
+# PR-scoped maintainer review as a job summary only — never a comment on the
+# contributor's pull request (that would risk reading as a verdict).
+on:
+  pull_request:
+
+permissions:
+  contents: read           # read-only: writes nothing back, posts no comment
+
+jobs:
+  summary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git fetch --no-tags origin "${{ github.base_ref }}"
+      - uses: ./.github/actions/maintainer-review
+        with:
+          base: "origin/${{ github.base_ref }}"
+          publish-badge: "false"

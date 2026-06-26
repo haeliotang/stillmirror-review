@@ -1,0 +1,25 @@
+name: StillMirror badge
+
+# Refresh the maintainer-review badge on a dedicated orphan branch.
+# Triggers at human / work-product boundaries, not per task.
+on:
+  schedule:
+    - cron: "0 9 * * 1"   # weekly, Monday 09:00 UTC
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+
+permissions:
+  contents: write          # only to write the badge branch
+
+jobs:
+  badge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so the review window sees all commits
+      - uses: ./.github/actions/maintainer-review
+        with:
+          since: "90d"
+          publish-badge: "true"

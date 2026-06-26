@@ -74,8 +74,45 @@ Classification uses the conventional-commit prefix (`feat:`, `fix:`, `chore:`,
   commit. `triage_responding` is undercounted; the report says so.
 - Any future cross-project aggregate report must be anonymized.
 
-## Recipes
+## Automate it (GitHub Action)
 
-A `pre-push` hook or GitHub Action can regenerate the badge — see
-[TRIGGERS.md](TRIGGERS.md) for the same `--base` pattern. A dedicated GitHub
-Action wrapper is on the roadmap (see [VISION.md](VISION.md)).
+A composite Action keeps the badge live with no manual work — the loop that makes
+the badge actually self-propagating. Add one workflow to your repo:
+
+```yaml
+# .github/workflows/stillmirror-badge.yml
+name: StillMirror badge
+on:
+  schedule: [{ cron: "0 9 * * 1" }]   # weekly
+  workflow_dispatch: {}
+permissions:
+  contents: write                      # only to write the badge branch
+jobs:
+  badge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }       # full history for the review window
+      - uses: haeliotang/stillmirror-review/.github/actions/maintainer-review@stillmirror-review--v0.3.2
+        with:
+          since: "90d"
+          publish-badge: "true"
+```
+
+The Action writes `maintainer-badge.json` to a dedicated **orphan branch**
+(`stillmirror-badges` by default) using the built-in `GITHUB_TOKEN` — your `main`
+history stays clean, and an unchanged badge produces no commit. Then point your
+README at the live endpoint badge:
+
+```markdown
+![StillMirror](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/OWNER/REPO/stillmirror-badges/maintainer-badge.json)
+```
+
+**Inputs:** `since` (default `90d`), `base` (scope to a branch for PR runs),
+`badge-branch` (default `stillmirror-badges`), `publish-badge` (`true`/`false`),
+`out-dir`.
+
+For a PR-scoped review, run the Action with `base: origin/${{ github.base_ref }}`
+and `publish-badge: "false"` — it writes a **job summary only**, never a comment
+on the contributor's PR. (A published GitHub Marketplace listing is on the
+roadmap; see [VISION.md](VISION.md).)

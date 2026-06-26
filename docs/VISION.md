@@ -101,10 +101,12 @@ honest:
   verdict creep).
 - **Parallel — Open-source Maintainer Review (wedge)** *(v0 shipped)*: the
   `maintainer-review` command — capture-free, git-only, landing as a committable
-  **badge + report** with a canonical sidecar. Distribution is designed in (the
-  badge is the ad). See [MAINTAINER-REVIEW.md](MAINTAINER-REVIEW.md). *Deferred:*
-  a GitHub Action wrapper, PR/issue enrichment (a flood to be triaged, not
-  dumped), and an **anonymized** "State of OSS Maintenance" aggregate report.
+  **badge + report** with a canonical sidecar — plus a **composite GitHub Action**
+  that auto-refreshes the badge on a dedicated orphan branch (the self-propagating
+  loop). Distribution is designed in (the badge is the ad). See
+  [MAINTAINER-REVIEW.md](MAINTAINER-REVIEW.md). *Deferred:* a Marketplace listing,
+  per-PR comments, PR/issue enrichment (a flood to be triaged, not dumped), and an
+  **anonymized** "State of OSS Maintenance" aggregate report.
 - **v0.5 — Claude Desktop MCPB review adapter**: read `.stillmirror/` for
   reflective, non-coding review sessions.
 - **v0.6 — Multi-agent budget *view***: a view on the same spine, not a pillar.
