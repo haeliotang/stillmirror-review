@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""StillMirror MCP server — a thin, read-mostly adapter over the CLI.
+
+For reflective, non-coding review in Claude Desktop. It surfaces *evidence*
+(review-due, the alignment review) and records the *user's own* alignment
+attestation. It never fabricates a review or renders a verdict — the judgment
+stays the human's, and the alignment record names the human who is accountable.
+
+Hand-rolled JSON-RPC 2.0 over newline-delimited stdio, stdlib only (no SDK), so
+it keeps the project's zero-dependency identity. All real work is delegated to
+the sibling `stillmirror-review` CLI.
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+
+CLI = str(Path(__file__).resolve().parent / "stillmirror-review")
+SERVER_NAME = "stillmirror-review"
+SERVER_VERSION = "0.5.0"
+PROTOCOL_VERSION = "2024-11-05"
+
+TOOLS = [
+    {
+        "name": "review_due",
+        "description": (
+            "What needs the user's review in a project: unreviewed allocations, new "
+            "goal events, and how many agent threads ran since the last human-attested "
+            "review. Read-only evidence."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"project_path": {"type": "string", "description": "Absolute path to the project repository"}},
+            "required": ["project_path"],
+        },
+    },
+    {
+        "name": "review",
+        "description": (
+            "Generate and return the project's Project Alignment Review (coverage and "
+            "blind spots, review debt, goal provenance, triage, allocation evidence). "
+            "This is evidence for the user's own review, NOT a verdict — present it as "
+            "evidence and let the user judge; do not summarize it as a conclusion about "
+            "whether the project is good or drifting."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project_path": {"type": "string", "description": "Absolute path to the project repository"},
+                "since": {"type": "string", "description": "Window, e.g. 30d (default 30d)"},
+            },
+            "required": ["project_path"],
+        },
+    },
+    {
+        "name": "record_alignment",
+        "description": (
+            "Record the USER'S OWN alignment attestation — the irreducible human act this "
+            "tool exists to protect. You (the assistant) must NOT choose the labels or "
+            "fabricate this judgment: pass only the labels the user explicitly chose, and "
+            "name the user as the attester. Valid labels: necessary_support, "
+            "intentional_pivot, operational_drift, exploration, noise, misclassification, "
+            "insufficient_evidence."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project_path": {"type": "string", "description": "Absolute path to the project repository"},
+                "labels": {"type": "array", "items": {"type": "string"}, "description": "The labels the user chose"},
+                "attested_by": {"type": "string", "description": "The user's name — who is accountable for this judgment"},
+                "note": {"type": "string", "description": "The user's note, in their words"},
+            },
+            "required": ["project_path", "labels", "attested_by"],
+        },
+    },
+]
+
+
+def run_cli(project_path: str, args: list[str]) -> str:
+    proc = subprocess.run(
+        [sys.executable, CLI, *args],
+        cwd=project_path or os.getcwd(),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=60,
+    )
+    if proc.returncode != 0:
+        return f"error: {(proc.stderr or proc.stdout).strip()}"
+    return proc.stdout.strip()
+
+
+def call_tool(name: str, args: dict[str, Any]) -> str:
+    project_path = args.get("project_path") or os.getcwd()
+    if name == "review_due":
+        return run_cli(project_path, ["review-due"])
+    if name == "review":
+        since = args.get("since") or "30d"
+        out = run_cli(project_path, ["review", "--since", since])
+        try:
+            path = json.loads(out).get("output")
+        except Exception:
+            return out
+        return Path(path).read_text(encoding="utf-8") if path else out
+    if name == "record_alignment":
+        labels = args.get("labels") or []
+        attested_by = (args.get("attested_by") or "").strip()
+        if not labels:
+            return "error: at least one label is required — this must be the user's own choice."
+        if not attested_by:
+            return "error: attested_by is required — name the human who is accountable; do not attest on their behalf."
+        cli_args = ["alignment", "record", "--attested-by", attested_by]
+        for label in labels:
+            cli_args += ["--label", str(label)]
+        if args.get("note"):
+            cli_args += ["--note", str(args["note"])]
+        return run_cli(project_path, cli_args)
+    return f"error: unknown tool {name}"
+
+
+def handle(message: dict[str, Any]) -> dict[str, Any] | None:
+    method = message.get("method")
+    mid = message.get("id")
+    if method == "initialize":
+        return {
+            "jsonrpc": "2.0",
+            "id": mid,
+            "result": {
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
+            },
+        }
+    if method == "notifications/initialized":
+        return None
+    if method == "ping":
+        return {"jsonrpc": "2.0", "id": mid, "result": {}}
+    if method == "tools/list":
+        return {"jsonrpc": "2.0", "id": mid, "result": {"tools": TOOLS}}
+    if method == "tools/call":
+        params = message.get("params") or {}
+        try:
+            text = call_tool(str(params.get("name")), params.get("arguments") or {})
+            is_error = text.startswith("error:")
+        except Exception as exc:  # never crash the server on one bad call
+            text, is_error = f"error: {exc}", True
+        return {"jsonrpc": "2.0", "id": mid, "result": {"content": [{"type": "text", "text": text}], "isError": is_error}}
+    if mid is not None:
+        return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"method not found: {method}"}}
+    return None
+
+
+def main() -> int:
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(message, dict):
+            continue
+        response = handle(message)
+        if response is not None:
+            sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

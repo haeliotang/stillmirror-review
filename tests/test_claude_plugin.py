@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "plugins" / "stillmirror-review"
 CAPTURE = PLUGIN / "bin" / "stillmirror-capture"
 REVIEW = PLUGIN / "bin" / "stillmirror-review"
+MCP = PLUGIN / "bin" / "stillmirror-mcp"
 ACTION_DIR = ROOT / ".github" / "actions" / "maintainer-review"
 PUBLISH_BADGE = ACTION_DIR / "publish-badge.sh"
 
@@ -532,6 +533,33 @@ class StillMirrorPluginTests(unittest.TestCase):
             blob = (agg / "state-of-oss-maintenance.md").read_text() + (agg / "state-of-oss-maintenance.json").read_text()
             self.assertNotIn("SecretContributor", blob)  # names no contributor
             self.assertIn("anonymized", blob.casefold())
+
+    def mcp_roundtrip(self, requests: list[dict]) -> dict:
+        payload = "".join(json.dumps(r) + "\n" for r in requests)
+        proc = subprocess.run([str(MCP)], input=payload, capture_output=True, text=True, encoding="utf-8", timeout=60)
+        return {json.loads(line)["id"]: json.loads(line) for line in proc.stdout.splitlines() if line.strip() and "id" in json.loads(line)}
+
+    def test_mcp_server_surfaces_evidence_and_records_attestation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = str(Path(temp))
+            responses = self.mcp_roundtrip(
+                [
+                    {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                    {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                    {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+                    {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "review_due", "arguments": {"project_path": project}}},
+                    {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "record_alignment", "arguments": {"project_path": project, "labels": ["necessary_support"], "attested_by": "Hao"}}},
+                    {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "record_alignment", "arguments": {"project_path": project, "labels": ["necessary_support"], "attested_by": ""}}},
+                ]
+            )
+            self.assertEqual(responses[1]["result"]["serverInfo"]["name"], "stillmirror-review")
+            tool_names = {t["name"] for t in responses[2]["result"]["tools"]}
+            self.assertEqual(tool_names, {"review_due", "review", "record_alignment"})
+            self.assertIn('"due"', responses[3]["result"]["content"][0]["text"])  # evidence, read-only
+            self.assertIn("Hao", responses[4]["result"]["content"][0]["text"])  # named human attestation recorded
+            # The assistant cannot attest on the human's behalf: a missing attester is refused.
+            self.assertTrue(responses[5]["result"]["isError"])
+            self.assertIn("attested_by", responses[5]["result"]["content"][0]["text"])
 
     def test_task_lifecycle_events_are_captured_as_control_events(self) -> None:
         # TaskCreated / TaskCompleted are real Claude Code hooks (confirmed by the

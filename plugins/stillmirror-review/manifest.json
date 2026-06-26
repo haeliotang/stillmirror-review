@@ -1,0 +1,35 @@
+{
+  "manifest_version": "0.1",
+  "name": "stillmirror-review",
+  "display_name": "StillMirror Review",
+  "version": "0.5.0",
+  "description": "Reflective review for agentic work in Claude Desktop: surface where agent work was allocated, see what needs your review, and record your own alignment attestations. Evidence, never a verdict.",
+  "author": {
+    "name": "Haelio Tang",
+    "email": "stillmirror@haelio.cc"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/haeliotang/stillmirror-review",
+  "server": {
+    "type": "python",
+    "entry_point": "bin/stillmirror-mcp",
+    "mcp_config": {
+      "command": "python3",
+      "args": ["${__dirname}/bin/stillmirror-mcp"]
+    }
+  },
+  "tools": [
+    {
+      "name": "review_due",
+      "description": "What needs the user's review: unreviewed allocations, new goal events, agent threads since the last human-attested review."
+    },
+    {
+      "name": "review",
+      "description": "Return the project's Alignment Review (coverage, review debt, goal provenance, triage, allocation evidence). Evidence, not a verdict."
+    },
+    {
+      "name": "record_alignment",
+      "description": "Record the user's own alignment attestation — never fabricated by the assistant; names the accountable human."
+    }
+  ]
+}

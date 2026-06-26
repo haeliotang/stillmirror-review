@@ -118,8 +118,13 @@ honest:
   that names no project or contributor. See
   [MAINTAINER-REVIEW.md](MAINTAINER-REVIEW.md). *Deferred:* a Marketplace listing
   and per-PR comments.
-- **v0.5 — Claude Desktop MCPB review adapter**: read `.stillmirror/` for
-  reflective, non-coding review sessions.
+- **v0.5 — Claude Desktop MCPB review adapter** *(shipped)*: a stdlib MCP server
+  (`bin/stillmirror-mcp`, a thin adapter over the CLI) + an MCPB `manifest.json`,
+  bringing reflective review into Claude Desktop. Three tools — `review_due`,
+  `review` (evidence), `record_alignment` (the named human act). The accountability
+  floor is enforced at the tool boundary: it surfaces evidence and records the
+  user's own attestation, and refuses to attest on the human's behalf. See
+  [MCP-ADAPTER.md](MCP-ADAPTER.md).
 - **v0.6 — Multi-agent budget *view***: a view on the same spine, not a pillar.
 - **v1.0 — Objective provenance-lite for agentic projects.**
 - **Deferred** — research / writing drift review.
