@@ -91,6 +91,35 @@ change is the signal that keeps its value — so a StillMirror **alignment recor
 is itself a named human attestation (`alignment record --attested-by "<name>"`)
 and must never be ghost-written by an agent.
 
+## Optional: PR/issue enrichment
+
+`triage_responding` is undercounted because it lives in pull-request and issue
+threads, not commits. Opt in to fill part of that blind spot via the `gh` CLI:
+
+```sh
+stillmirror-review maintainer-review --since 90d --with-pr-issues
+```
+
+It adds merged-PR and closed-issue counts for the window. It **degrades
+gracefully** — if `gh` is missing, unauthenticated, or the repo is not on GitHub,
+the wedge stays git-only and the report says so. The badge stays commit-based;
+PR/issue counts are reported as separate evidence, never folded into the
+distribution.
+
+## Aggregate across repos (anonymized)
+
+Run `maintainer-review` on several repos, then aggregate the sidecars into an
+**anonymized** "State of OSS Maintenance" report — distributions only, naming no
+project and no contributor:
+
+```sh
+stillmirror-review aggregate path/to/sidecars/ another/sidecar.json --out-dir agg
+```
+
+It reports medians (feature/upkeep, bot/human-attested) and totals across repos.
+This is the only honest way to make a flood of repos legible without ranking or
+exposing anyone — the demand-gen artifact that names no one.
+
 ## What it does not do (values boundary)
 
 - **Evidence, not verdict.** No score, no grade, no "you're drowning" language.
@@ -120,7 +149,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }       # full history for the review window
-      - uses: haeliotang/stillmirror-review/.github/actions/maintainer-review@stillmirror-review--v0.3.5
+      - uses: haeliotang/stillmirror-review/.github/actions/maintainer-review@stillmirror-review--v0.4.0
         with:
           since: "90d"
           publish-badge: "true"

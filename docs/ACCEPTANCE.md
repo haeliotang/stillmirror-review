@@ -44,6 +44,12 @@ Functional gates:
 - `maintainer-review` surfaces an `authorship` split (bot / attested / human)
   with per-commit attestation tiers, as composition not a ranking, and names the
   signature-not-verified blind spot.
+- `review` includes a **Review Debt** section (unreviewed allocations / goal
+  events / agent threads since the last human-attested review).
+- `maintainer-review --with-pr-issues` enriches via `gh` and degrades gracefully
+  to git-only when `gh` is unavailable.
+- `aggregate` produces an anonymized cross-repo report that names no project or
+  contributor.
 - redacted sample contains no private paths, raw prompts, or transcript payloads.
 
 Boundary:

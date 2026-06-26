@@ -96,9 +96,11 @@ honest:
   human-boundary SessionStart nudge (opt-in) and a PR-time `--base` review;
   triage aggregation (by goal, by agent thread, surfaced exceptions) in the
   review. See [TRIGGERS.md](TRIGGERS.md).
-- **v0.4 — Evidence breadth**: commit / diff / PR / issue ingestion;
-  session-to-session comparison and deltas (kept out of v0.3 to avoid trend /
-  verdict creep).
+- **v0.4 — Evidence breadth** *(in progress)*: opt-in PR/issue ingestion via
+  `gh` (shipped), and **Review Debt** as a first-class metric — agent work
+  authorized but not yet stood behind, measured against the last human-attested
+  review (the edge-era "budget" is human attention). *Still deferred:*
+  session-to-session comparison and deltas (to avoid trend / verdict creep).
 - **Parallel — Open-source Maintainer Review (wedge)** *(v0 shipped)*: the
   `maintainer-review` command — capture-free, git-only, landing as a committable
   **badge + report** with a canonical sidecar — plus a **composite GitHub Action**
@@ -106,9 +108,11 @@ honest:
   loop), and an **authorship & accountability** view (bot / human-attested /
   human) that surfaces how much of a flood carries explicit human accountability,
   as composition, never a ranking. Distribution is designed in (the badge is the
-  ad). See [MAINTAINER-REVIEW.md](MAINTAINER-REVIEW.md). *Deferred:* a Marketplace
-  listing, per-PR comments, PR/issue enrichment (a flood to be triaged, not
-  dumped), and an **anonymized** "State of OSS Maintenance" aggregate report.
+  ad); opt-in **PR/issue enrichment** (via `gh`, git-only stays the default); and
+  an **anonymized aggregate** (`aggregate`) — a "State of OSS Maintenance" report
+  that names no project or contributor. See
+  [MAINTAINER-REVIEW.md](MAINTAINER-REVIEW.md). *Deferred:* a Marketplace listing
+  and per-PR comments.
 - **v0.5 — Claude Desktop MCPB review adapter**: read `.stillmirror/` for
   reflective, non-coding review sessions.
 - **v0.6 — Multi-agent budget *view***: a view on the same spine, not a pillar.

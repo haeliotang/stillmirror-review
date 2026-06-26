@@ -453,6 +453,60 @@ class StillMirrorPluginTests(unittest.TestCase):
             self.assertEqual(record["attested_by"], "Hao")
             self.assertTrue(record["human_attested"])
 
+    def test_review_has_review_debt_against_last_attestation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.run_script(project, "review", "--since", "30d")
+            review_file = next((project / ".stillmirror" / "reviews").glob("*-project-alignment-review.md"))
+            text = review_file.read_text()
+            self.assertIn("## Review Debt", text)
+            self.assertIn("Last attested review", text)
+            # A named human attestation resets the debt clock and shows the attester.
+            self.run_script(project, "alignment", "record", "--label", "necessary_support", "--attested-by", "Hao")
+            self.run_script(project, "review", "--since", "30d")
+            self.assertIn("by Hao", review_file.read_text())
+
+    def test_maintainer_review_pr_issues_degrades_gracefully(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+
+            def git(*args: str) -> None:
+                subprocess.run(["git", "-C", str(project), *args], check=True, capture_output=True, text=True)
+
+            git("init")
+            git("config", "user.email", "t@t.co")
+            git("config", "user.name", "t")
+            git("commit", "--allow-empty", "-m", "feat: a")
+            result = json.loads(self.run_script(project, "maintainer-review", "--since", "365d", "--with-pr-issues").stdout)
+            sidecar = json.loads(Path(result["sidecar"]).read_text())
+            self.assertIsNone(sidecar["pr_issue_activity"])  # no GitHub remote -> graceful degrade
+            report = Path(result["report"]).read_text()
+            self.assertIn("## Triage & responding (via gh)", report)
+            self.assertIn("git-only blind spot", report)
+
+    def test_aggregate_is_anonymized(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+
+            def git(*args: str) -> None:
+                subprocess.run(["git", "-C", str(project), *args], check=True, capture_output=True, text=True)
+
+            git("init")
+            git("config", "user.email", "secret@example.com")
+            git("config", "user.name", "SecretContributor")
+            (project / "a.py").write_text("a\n")
+            git("add", "-A")
+            git("commit", "-m", "feat: add a")
+            out1, out2, agg = project / "r1", project / "r2", project / "agg"
+            self.run_script(project, "maintainer-review", "--since", "365d", "--out-dir", str(out1))
+            self.run_script(project, "maintainer-review", "--since", "365d", "--out-dir", str(out2))
+            result = json.loads(self.run_script(project, "aggregate", str(out1), str(out2), "--out-dir", str(agg)).stdout)
+            self.assertEqual(result["repos"], 2)
+            self.assertIn("feature_pct", result["median_pct"])
+            blob = (agg / "state-of-oss-maintenance.md").read_text() + (agg / "state-of-oss-maintenance.json").read_text()
+            self.assertNotIn("SecretContributor", blob)  # names no contributor
+            self.assertIn("anonymized", blob.casefold())
+
     def test_publish_badge_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)

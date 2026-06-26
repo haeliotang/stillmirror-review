@@ -40,7 +40,7 @@ claude plugin details stillmirror-review
 Expected shape:
 
 ```text
-stillmirror-review 0.3.5
+stillmirror-review 0.4.0
   The review layer for agentic work. Joins accepted-goal provenance with
   allocation evidence for user alignment review.
   Source: stillmirror-review@stillmirror
@@ -119,8 +119,13 @@ plugins/stillmirror-review/bin/stillmirror-review review-due
 plugins/stillmirror-review/bin/stillmirror-review review --since 30d
 plugins/stillmirror-review/bin/stillmirror-review review --base origin/main
 plugins/stillmirror-review/bin/stillmirror-review maintainer-review --since 90d
-plugins/stillmirror-review/bin/stillmirror-review alignment record --label necessary_support
+plugins/stillmirror-review/bin/stillmirror-review maintainer-review --with-pr-issues
+plugins/stillmirror-review/bin/stillmirror-review aggregate path/to/sidecars/ --out-dir agg
+plugins/stillmirror-review/bin/stillmirror-review alignment record --label necessary_support --attested-by "Your Name"
 ```
+
+The review now also reports **Review Debt** — agent work you authorized but have
+not yet stood behind, measured against your last human-attested review.
 
 ## Maintainer review (the wedge)
 

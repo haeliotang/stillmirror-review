@@ -598,6 +598,14 @@ def list_alignment(root: Path) -> list[dict[str, Any]]:
     return records
 
 
+def last_attestation(root: Path) -> dict[str, Any] | None:
+    """The most recent alignment record — the last time a human stood behind a review."""
+    records = list_alignment(root)
+    attested = [record for record in records if record.get("human_attested")]
+    chosen = attested or records
+    return chosen[-1] if chosen else None
+
+
 def event_text(event: dict[str, Any]) -> str:
     pieces = [
         str(event.get("hook_event_name") or ""),
@@ -1085,6 +1093,33 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
     if coverage.get("note"):
         lines.extend(["", f"> {coverage['note']}"])
 
+    # Review debt: agent work authorized but not yet stood behind. The scarce
+    # budget is human attention; this is the overspend, measured against the last
+    # *human-attested* review (not the last automated anything).
+    debt = compute_review_due(root, nudge_threshold(None))
+    last_att = last_attestation(root)
+    if last_att:
+        attested_line = (
+            f"- Last attested review: {str(last_att.get('recorded_at', ''))[:10]} "
+            f"by {last_att.get('attested_by') or 'unknown'}"
+        )
+    else:
+        attested_line = "- Last attested review: (none yet — nothing has been stood behind)"
+    lines.extend(
+        [
+            "",
+            "## Review Debt",
+            "",
+            "Agent work you authorized but have not yet stood behind. The budget here",
+            "is your attention; this is the overspend.",
+            "",
+            attested_line,
+            f"- Unreviewed allocations since: {debt['new_allocations']}",
+            f"- New goal events since: {debt['new_goal_events']}",
+            f"- Agent threads (sessions) since: {debt['sessions_touched']}",
+        ]
+    )
+
     lines.extend(
         [
             "",
@@ -1336,6 +1371,32 @@ def git_commit_files(root: Path, since: dt.datetime, base_range: str = "") -> li
     return commits
 
 
+def gh_pr_issue_activity(root: Path, since: dt.datetime) -> dict[str, Any] | None:
+    """Optional PR/issue enrichment via the `gh` CLI. Returns None — degrade
+    gracefully — when gh is missing, unauthenticated, or the repo is not on
+    GitHub. The wedge stays git-only by default; this only fires on opt-in.
+    """
+    epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+
+    def gh_json(args: list[str]) -> Any:
+        result = subprocess.run(
+            ["gh", *args], cwd=str(root), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=20,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "gh failed")
+        return json.loads(result.stdout or "[]")
+
+    try:
+        prs = gh_json(["pr", "list", "--state", "merged", "--limit", "500", "--json", "mergedAt"])
+        issues = gh_json(["issue", "list", "--state", "closed", "--limit", "500", "--json", "closedAt"])
+    except Exception:
+        return None
+    merged = sum(1 for pr in prs if (parse_time(pr.get("mergedAt")) or epoch) >= since)
+    closed = sum(1 for issue in issues if (parse_time(issue.get("closedAt")) or epoch) >= since)
+    return {"merged_prs": merged, "closed_issues": closed}
+
+
 def classify_commit(subject: str, files: list[str] | None = None) -> dict[str, Any]:
     """Classify a commit into a maintainer label + its canonical class.
 
@@ -1368,7 +1429,7 @@ def shields_badge_url(label: str, message: str, color: str) -> str:
     return f"https://img.shields.io/badge/{esc(label)}-{esc(message)}-{color}"
 
 
-def maintainer_review(root: Path, since_value: str, base: str | None = None, out_dir: str = "") -> dict[str, Any]:
+def maintainer_review(root: Path, since_value: str, base: str | None = None, out_dir: str = "", with_pr_issues: bool = False) -> dict[str, Any]:
     """Capture-free maintainer review of a repo's recent commits (the wedge).
 
     Reuses the canonical RUBRIC underneath via MAINTAINER_PROFILE, so the human
@@ -1380,6 +1441,7 @@ def maintainer_review(root: Path, since_value: str, base: str | None = None, out
     else:
         since = parse_since(since_value)
     commits = git_commit_files(root, since, base or "")
+    pr_issue = gh_pr_issue_activity(root, since) if with_pr_issues else None
     classified = []
     maintainer_counts: Counter[str] = Counter()
     canonical_counts: Counter[str] = Counter()
@@ -1457,6 +1519,14 @@ def maintainer_review(root: Path, since_value: str, base: str | None = None, out
         count = maintainer_counts.get(label, 0)
         pct = round(count * 100 / total)
         lines.append(f"- `{label}`: {count} ({pct}%)")
+    if with_pr_issues:
+        lines.extend(["", "## Triage & responding (via gh)", ""])
+        if pr_issue is not None:
+            lines.append(f"- Merged PRs in window: {pr_issue['merged_prs']}")
+            lines.append(f"- Closed issues in window: {pr_issue['closed_issues']}")
+            lines.append("- Partially fills the `triage_responding` blind spot above.")
+        else:
+            lines.append("- `gh` unavailable or repo not on GitHub — `triage_responding` remains a git-only blind spot.")
     lines.extend(
         [
             "",
@@ -1510,6 +1580,7 @@ def maintainer_review(root: Path, since_value: str, base: str | None = None, out
                 "distinct_authors": len(authors),
                 "distinct_human_authors": len(human_authors),
             },
+            "pr_issue_activity": pr_issue if with_pr_issues else None,
             "coverage": {
                 "source": "git commit subjects, changed files, and authorship",
                 "not_captured": [
@@ -1533,6 +1604,121 @@ def maintainer_review(root: Path, since_value: str, base: str | None = None, out
     }
 
 
+def _median(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return float(ordered[mid])
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def collect_sidecars(paths: list[str]) -> list[Path]:
+    found: list[Path] = []
+    for raw in paths:
+        path = Path(raw).expanduser()
+        if path.is_dir():
+            found.extend(sorted(path.rglob("maintainer-review.json")))
+        elif path.is_file():
+            found.append(path)
+    return found
+
+
+def aggregate_reviews(paths: list[str], out_dir: str = "") -> dict[str, Any]:
+    """Anonymized aggregate over many maintainer-review sidecars.
+
+    Names no project and no contributor — only distributions across repos. This
+    is the only honest way to make a flood of repos legible without ranking or
+    exposing anyone.
+    """
+    repos = []
+    for path in collect_sidecars(paths):
+        doc = load_json(path, None)
+        if isinstance(doc, dict) and "maintainer_counts" in doc:
+            repos.append(doc)
+    per_repo = []
+    label_totals: Counter[str] = Counter()
+    tier_totals: Counter[str] = Counter()
+    total_commits = 0
+    for doc in repos:
+        counts = doc.get("maintainer_counts") or {}
+        commits = int(doc.get("commits") or sum(counts.values()) or 0)
+        denom = commits or 1
+        authorship = doc.get("authorship") or {}
+        per_repo.append(
+            {
+                "feature": counts.get("feature", 0) * 100 / denom,
+                "upkeep": sum(counts.get(label, 0) for label in UPKEEP_LABELS) * 100 / denom,
+                "bot": authorship.get("bot", 0) * 100 / denom,
+                "attested": authorship.get("attested", 0) * 100 / denom,
+            }
+        )
+        for label, value in counts.items():
+            label_totals[label] += value
+        for tier in ("bot", "attested", "human"):
+            tier_totals[tier] += authorship.get(tier, 0)
+        total_commits += commits
+    medians = {
+        "feature_pct": round(_median([r["feature"] for r in per_repo])),
+        "upkeep_pct": round(_median([r["upkeep"] for r in per_repo])),
+        "bot_pct": round(_median([r["bot"] for r in per_repo])),
+        "attested_pct": round(_median([r["attested"] for r in per_repo])),
+    }
+    aggregate = {
+        "schema_version": 1,
+        "generated_at": utc_now(),
+        "anonymized": True,
+        "repos": len(repos),
+        "total_commits": total_commits,
+        "median_pct": medians,
+        "label_totals": dict(label_totals),
+        "attestation_totals": dict(tier_totals),
+    }
+    target = Path(out_dir).expanduser() if out_dir else Path.cwd()
+    target.mkdir(parents=True, exist_ok=True)
+    json_path = target / "state-of-oss-maintenance.json"
+    report_path = target / "state-of-oss-maintenance.md"
+    write_json(json_path, aggregate)
+    report_path.write_text(
+        "\n".join(
+            [
+                "# State of OSS Maintenance (anonymized aggregate)",
+                "",
+                f"- Generated: {utc_now()}",
+                f"- Repositories: {len(repos)}",
+                f"- Total commits: {total_commits}",
+                "",
+                "This aggregate names no project and no contributor — only distributions.",
+                "",
+                "## Effort (median across repos)",
+                "",
+                f"- feature: {medians['feature_pct']}%",
+                f"- upkeep: {medians['upkeep_pct']}%",
+                "",
+                "## Accountability (median across repos)",
+                "",
+                f"- bot-authored: {medians['bot_pct']}%",
+                f"- human-attested: {medians['attested_pct']}%",
+                "",
+                "## Boundaries",
+                "",
+                "- Anonymized; evidence about the ecosystem, not a ranking of projects.",
+                "- No project or contributor is named.",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "repos": len(repos),
+        "total_commits": total_commits,
+        "median_pct": medians,
+        "report": str(report_path),
+        "json": str(json_path),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="StillMirror Review local helper")
     sub = parser.add_subparsers(dest="command")
@@ -1550,6 +1736,10 @@ def main() -> int:
     maintainer.add_argument("--since", default="90d")
     maintainer.add_argument("--base", default="", help="scope to commits since merge-base(<ref>, HEAD)")
     maintainer.add_argument("--out-dir", default="", help="where to write report + badge (default .stillmirror/reviews; point at a committed dir to publish the badge)")
+    maintainer.add_argument("--with-pr-issues", action="store_true", help="opt-in: enrich with merged-PR / closed-issue counts via gh (degrades gracefully)")
+    aggregate = sub.add_parser("aggregate")
+    aggregate.add_argument("paths", nargs="+", help="maintainer-review.json sidecars or directories of them")
+    aggregate.add_argument("--out-dir", default="")
     goals = sub.add_parser("goals")
     goals_sub = goals.add_subparsers(dest="goals_command")
     goals_add = goals_sub.add_parser("add")
@@ -1603,7 +1793,10 @@ def main() -> int:
             return run_nudge(threshold)
         print(json.dumps(compute_review_due(root, threshold), ensure_ascii=False, indent=2))
     elif args.command == "maintainer-review":
-        result = maintainer_review(root, args.since, args.base or None, args.out_dir)
+        result = maintainer_review(root, args.since, args.base or None, args.out_dir, args.with_pr_issues)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "aggregate":
+        result = aggregate_reviews(args.paths, args.out_dir)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "goals":
         if args.goals_command == "add":
