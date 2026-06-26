@@ -31,10 +31,12 @@ badge):
 
 ## The badge
 
-The command prints a paste-ready static badge, e.g.:
+The badge answers the maintainer's one question in a glance — advancing the core
+vs upkeep — as a neutral split (`other` is excluded, not folded into upkeep). The
+command prints a paste-ready static badge, e.g.:
 
 ```markdown
-![StillMirror](https://img.shields.io/badge/work-feature_40%25_%C2%B7_fixes_30%25-blue)
+![StillMirror](https://img.shields.io/badge/work-feature_40%25_%C2%B7_upkeep_45%25-blue)
 ```
 
 For a live badge that updates from a committed `maintainer-badge.json`:
@@ -61,8 +63,13 @@ possible):
 | `triage_responding` | `evaluation` |
 | `other` | `exploration` |
 
-Classification uses the conventional-commit prefix (`feat:`, `fix:`, `chore:`,
-`docs:`, …) when present, else whole-word keywords on the commit subject.
+Classification prefers, in order: the conventional-commit prefix (`feat:`,
+`fix:`, `chore:`, `docs:`, …); then the **changed file paths** — what actually
+changed, which is more truthful than the subject's claim and agnostic to whoever
+(human or agent) wrote the message (e.g. a commit touching only `docs/` → docs,
+only `.github/` → infra); then whole-word subject keywords. Genuinely ambiguous
+commits (e.g. a code change with a vague subject) stay `other` rather than being
+force-fit into a bucket.
 
 ## What it does not do (values boundary)
 
@@ -93,7 +100,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }       # full history for the review window
-      - uses: haeliotang/stillmirror-review/.github/actions/maintainer-review@stillmirror-review--v0.3.3
+      - uses: haeliotang/stillmirror-review/.github/actions/maintainer-review@stillmirror-review--v0.3.4
         with:
           since: "90d"
           publish-badge: "true"

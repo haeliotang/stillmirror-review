@@ -131,12 +131,12 @@ MAINTAINER_PROFILE: dict[str, dict[str, Any]] = {
         "display": "feature",
     },
     "bug_fixing": {
-        "patterns": ["fix", "fixes", "fixed", "bug", "bugs", "patch", "hotfix", "regression", "crash", "broken"],
+        "patterns": ["fix", "fixes", "fixed", "bug", "bugs", "patch", "hotfix", "regression", "crash", "broken", "refactor", "refactors", "refactored"],
         "canonical": "maintenance_debugging",
         "display": "fixes",
     },
     "release_packaging": {
-        "patterns": ["release", "released", "version", "bump", "bumps", "changelog", "publish", "tag", "package", "packaging"],
+        "patterns": ["release", "released", "version", "bump", "bumps", "changelog", "publish", "tag", "package", "packaging", "ship", "ships", "shipped"],
         "canonical": "packaging_distribution",
         "display": "release",
     },
@@ -146,7 +146,7 @@ MAINTAINER_PROFILE: dict[str, dict[str, Any]] = {
         "display": "infra",
     },
     "docs": {
-        "patterns": ["docs", "doc", "readme", "documentation", "comment", "comments"],
+        "patterns": ["docs", "doc", "readme", "documentation", "comment", "comments", "document", "documents", "documented"],
         "canonical": "packaging_distribution",
         "display": "docs",
     },
@@ -173,6 +173,32 @@ CONVENTIONAL_COMMIT = {
     "style": "infra",
     "revert": "triage_responding",
 }
+
+
+# Changed-file -> maintainer label. The path is "what actually changed" — more
+# truthful than the subject's claim, and agnostic to whoever (human or agent)
+# wrote the message. Only NON-code categories classify reliably from paths;
+# code files return "" so the subject still decides feature-vs-fix.
+FILE_RULES: list[tuple[str, str]] = [
+    (r"(^|/)(tests?|spec|__tests__)/", "infra"),
+    (r"(_test\.|\.test\.|_spec\.|\.spec\.)", "infra"),
+    (r"(^|/)\.github/", "infra"),
+    (r"(^|/)(dockerfile|docker-compose[^/]*|makefile|justfile)$", "infra"),
+    (r"(^|/)(requirements[^/]*\.txt|package(-lock)?\.json|yarn\.lock|pnpm-lock\.yaml|pyproject\.toml|setup\.(py|cfg)|go\.(mod|sum)|cargo\.(toml|lock)|gemfile)$", "infra"),
+    (r"\.(ya?ml|toml|ini|cfg)$", "infra"),
+    (r"(^|/)(changelog|history)", "release_packaging"),
+    (r"(^|/)(readme|contributing|authors|code_of_conduct|license)", "docs"),
+    (r"(^|/)docs?/", "docs"),
+    (r"\.(md|rst|adoc)$", "docs"),
+]
+
+
+def file_label(path: str) -> str:
+    text = path.casefold()
+    for pattern, label in FILE_RULES:
+        if re.search(pattern, text):
+            return label
+    return ""
 
 
 def utc_now() -> str:
@@ -1218,16 +1244,57 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
     return output
 
 
-def classify_commit(subject: str) -> dict[str, Any]:
-    """Classify a commit subject into a maintainer label + its canonical class.
+# Everything that is upkeep rather than advancing the core. `other` is excluded
+# (kept honest, not force-fit). Used for the badge and the report line.
+UPKEEP_LABELS = ("bug_fixing", "infra", "release_packaging", "docs", "triage_responding")
 
-    Conventional-commit prefix wins; else whole-word keyword match; else other.
+
+def git_commit_files(root: Path, since: dt.datetime, base_range: str = "") -> list[dict[str, Any]]:
+    """Read commits with their changed file paths (git-only, no merges)."""
+    if base_range:
+        selector = [f"{base_range}..HEAD"]
+    else:
+        selector = ["--since", since.isoformat()]
+    try:
+        raw = subprocess.run(
+            ["git", "-C", str(root), "log", *selector, "--no-merges", "--name-only", "--format=%x1e%H%x1f%s"],
+            check=True, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+        ).stdout
+    except Exception:
+        return []
+    commits = []
+    for chunk in raw.split("\x1e"):
+        if not chunk.strip():
+            continue
+        lines = chunk.split("\n")
+        head = lines[0].split("\x1f", 1)
+        commits.append(
+            {
+                "commit": head[0],
+                "subject": head[1] if len(head) > 1 else "",
+                "files": [line for line in lines[1:] if line.strip()],
+            }
+        )
+    return commits
+
+
+def classify_commit(subject: str, files: list[str] | None = None) -> dict[str, Any]:
+    """Classify a commit into a maintainer label + its canonical class.
+
+    Priority: conventional-commit prefix (structured author intent) -> changed
+    files (what actually changed, when they all agree on one non-code category)
+    -> whole-word subject keywords -> other. ``other`` stays honest: ambiguous
+    code commits with vague subjects are not force-fit into a bucket.
     """
     text = subject.casefold()
     match = re.match(r"\s*([a-z]+)(\([^)]*\))?!?:", text)
     if match and match.group(1) in CONVENTIONAL_COMMIT:
         label = CONVENTIONAL_COMMIT[match.group(1)]
         return {"label": label, "canonical": MAINTAINER_PROFILE[label]["canonical"], "reason": f"conventional:{match.group(1)}"}
+    file_labels = [file_label(path) for path in (files or [])]
+    if file_labels and all(file_labels) and len(set(file_labels)) == 1:
+        label = file_labels[0]
+        return {"label": label, "canonical": MAINTAINER_PROFILE[label]["canonical"], "reason": "files"}
     for label, spec in MAINTAINER_PROFILE.items():
         if label == "other":
             continue
@@ -1254,33 +1321,32 @@ def maintainer_review(root: Path, since_value: str, base: str | None = None, out
         since = parse_since(resolved) if resolved else parse_since(since_value)
     else:
         since = parse_since(since_value)
-    commits = git_entries(root, since, base or "")
+    commits = git_commit_files(root, since, base or "")
     classified = []
     maintainer_counts: Counter[str] = Counter()
     canonical_counts: Counter[str] = Counter()
     for commit in commits:
-        summary = commit.get("tool_input_summary") or {}
-        description = summary.get("description") or {}
-        subject = str(description.get("preview") or "")
-        result = classify_commit(subject)
+        subject = str(commit.get("subject") or "")
+        files = commit.get("files") or []
+        result = classify_commit(subject, files)
         maintainer_counts[result["label"]] += 1
         canonical_counts[result["canonical"]] += 1
         classified.append(
             {
-                "commit": str(summary.get("commit") or commit.get("event_id") or "")[:12],
+                "commit": str(commit.get("commit") or "")[:12],
                 "subject": subject,
+                "files_changed": len(files),
                 "label": result["label"],
                 "canonical": result["canonical"],
                 "reason": result["reason"],
             }
         )
     total = sum(maintainer_counts.values()) or 1
-    ordered = [(label, maintainer_counts.get(label, 0)) for label in MAINTAINER_PROFILE]
-    top = [(label, count) for label, count in sorted(ordered, key=lambda kv: kv[1], reverse=True) if count][:2]
-    if top:
-        message = " · ".join(f"{MAINTAINER_PROFILE[label]['display']} {round(count * 100 / total)}%" for label, count in top)
-    else:
-        message = "no commits in window"
+    feature_pct = round(maintainer_counts.get("feature", 0) * 100 / total)
+    upkeep_pct = round(sum(maintainer_counts.get(label, 0) for label in UPKEEP_LABELS) * 100 / total)
+    # The badge answers the maintainer's one question in a glance: advancing the
+    # core vs upkeep. `other` is shown in the full report, not forced into upkeep.
+    message = f"feature {feature_pct}% · upkeep {upkeep_pct}%" if commits else "no commits in window"
     # Neutral, fixed color: a badge must inform, never grade.
     badge = {"schemaVersion": 1, "label": "work", "message": message, "color": "blue"}
     badge_markdown = f"![StillMirror]({shields_badge_url('work', message, 'blue')})"
@@ -1315,9 +1381,6 @@ def maintainer_review(root: Path, since_value: str, base: str | None = None, out
         count = maintainer_counts.get(label, 0)
         pct = round(count * 100 / total)
         lines.append(f"- `{label}`: {count} ({pct}%)")
-    feature_pct = round(maintainer_counts.get("feature", 0) * 100 / total)
-    upkeep = sum(maintainer_counts.get(label, 0) for label in ("bug_fixing", "infra", "release_packaging", "docs"))
-    upkeep_pct = round(upkeep * 100 / total)
     lines.extend(
         [
             "",

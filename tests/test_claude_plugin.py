@@ -381,6 +381,39 @@ class StillMirrorPluginTests(unittest.TestCase):
             self.assertIn("triage_responding", report)
             self.assertNotIn("drowning", report.casefold())  # no verdict language
 
+    def test_maintainer_review_classifies_by_changed_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+
+            def git(*args: str) -> None:
+                subprocess.run(["git", "-C", str(project), *args], check=True, capture_output=True, text=True)
+
+            git("init")
+            git("config", "user.email", "t@t.co")
+            git("config", "user.name", "t")
+            (project / ".github" / "workflows").mkdir(parents=True)
+            (project / ".github" / "workflows" / "ci.yml").write_text("on: push\n")
+            git("add", "-A")
+            git("commit", "-m", "wip")  # vague subject, infra files
+            (project / "docs").mkdir()
+            (project / "docs" / "guide.md").write_text("# guide\n")
+            git("add", "-A")
+            git("commit", "-m", "stuff")  # vague subject, docs files
+            (project / "app.py").write_text("print(1)\n")
+            git("add", "-A")
+            git("commit", "-m", "make it faster somehow")  # code + vague subject -> other (not force-fit)
+
+            result = json.loads(self.run_script(project, "maintainer-review", "--since", "365d").stdout)
+            entries = {e["subject"]: e for e in json.loads(Path(result["sidecar"]).read_text())["entries"]}
+            self.assertEqual(entries["wip"]["label"], "infra")
+            self.assertEqual(entries["wip"]["reason"], "files")  # what changed, not what was claimed
+            self.assertEqual(entries["stuff"]["label"], "docs")
+            self.assertEqual(entries["make it faster somehow"]["label"], "other")  # honest, not force-fit
+
+            badge = json.loads(Path(result["badge"]).read_text())
+            self.assertIn("feature", badge["message"])
+            self.assertIn("upkeep", badge["message"])  # answers the maintainer's core question
+
     def test_publish_badge_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
