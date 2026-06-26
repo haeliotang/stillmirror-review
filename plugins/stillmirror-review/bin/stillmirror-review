@@ -1016,7 +1016,7 @@ def load_corrections(root: Path) -> dict[str, dict[str, Any]]:
     return result
 
 
-def record_correction(root: Path, event_id: str, labels: list[str], note: str) -> dict[str, Any]:
+def record_correction(root: Path, event_id: str, labels: list[str], note: str, attested_by: str = "") -> dict[str, Any]:
     init_project(root, quiet=True)
     if not event_id.strip():
         raise SystemExit("an event_id is required")
@@ -1025,12 +1025,15 @@ def record_correction(root: Path, event_id: str, labels: list[str], note: str) -
         raise SystemExit(f"unknown rubric labels: {', '.join(bad)}")
     if not labels:
         raise SystemExit("at least one rubric label is required")
+    # A correction is an accountable act, by whoever made it — a human now, a
+    # named review process later — so it carries an attester, not an assumption.
     record = {
         "schema_version": 1,
         "recorded_at": utc_now(),
         "event_id": event_id.strip(),
         "labels": [label for label in RUBRIC if label in set(labels)],
         "note": note,
+        "attested_by": attested_by.strip() or default_attester(root),
     }
     path = corrections_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1116,6 +1119,7 @@ def build_ledger(root: Path, since_value: str, base: str | None = None) -> dict[
                 "labels": correction["labels"],
                 "note": correction.get("note", ""),
                 "recorded_at": correction.get("recorded_at"),
+                "attested_by": correction.get("attested_by", ""),
             }
         entries.append(entry)
     counts = Counter(label for entry in entries for label in entry["allocated_to"])
@@ -1699,6 +1703,10 @@ def maintainer_review(root: Path, since_value: str, base: str | None = None, out
     report_path = target / f"{utc_now()[:10]}-maintainer-review.md"
     badge_path = target / "maintainer-badge.json"
     sidecar_path = target / "maintainer-review.json"
+    # The machine-discoverable distribution: an aggregate, name-free evidence
+    # endpoint a reviewer (human or AI) can fetch. The badge is the human glance;
+    # the full sidecar (with per-commit authors/subjects) stays local.
+    summary_path = target / "maintainer-summary.json"
 
     lines = [
         "# StillMirror Maintainer Review",
@@ -1800,6 +1808,26 @@ def maintainer_review(root: Path, since_value: str, base: str | None = None, out
             "entries": classified,
         },
     )
+    # Aggregate-only, name-free — safe to publish as a machine evidence endpoint.
+    write_json(
+        summary_path,
+        {
+            "schema_version": 1,
+            "generated_at": utc_now(),
+            "since": since.isoformat().replace("+00:00", "Z"),
+            "commits": len(commits),
+            "maintainer_counts": dict(maintainer_counts),
+            "canonical_counts": dict(canonical_counts),
+            "authorship": {
+                "bot": attestation.get("bot", 0),
+                "attested": attestation.get("attested", 0),
+                "human": attestation.get("human", 0),
+                "distinct_authors": len(authors),
+                "distinct_human_authors": len(human_authors),
+            },
+            "pr_issue_activity": pr_issue if with_pr_issues else None,
+        },
+    )
     return {
         "commits": len(commits),
         "maintainer_counts": dict(maintainer_counts),
@@ -1809,6 +1837,7 @@ def maintainer_review(root: Path, since_value: str, base: str | None = None, out
         "report": str(report_path),
         "badge": str(badge_path),
         "sidecar": str(sidecar_path),
+        "summary": str(summary_path),
     }
 
 
@@ -1982,6 +2011,7 @@ def main() -> int:
     correct.add_argument("--event", required=True)
     correct.add_argument("--label", action="append", required=True, choices=list(RUBRIC.keys()))
     correct.add_argument("--note", default="")
+    correct.add_argument("--attested-by", default="", help="who made this correction (human or named review process); defaults to git user.name")
     alignment = sub.add_parser("alignment")
     alignment_sub = alignment.add_subparsers(dest="alignment_command")
     alignment_record = alignment_sub.add_parser("record")
@@ -2044,7 +2074,7 @@ def main() -> int:
             problem.print_help()
             return 2
     elif args.command == "correct":
-        record = record_correction(root, args.event, args.label, args.note)
+        record = record_correction(root, args.event, args.label, args.note, args.attested_by)
         print(json.dumps({"correction": record, "output": str(corrections_path(root))}, ensure_ascii=False, indent=2))
     elif args.command == "alignment":
         if args.alignment_command == "record":

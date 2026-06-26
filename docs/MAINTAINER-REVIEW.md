@@ -47,6 +47,22 @@ For a live badge that updates from a committed `maintainer-badge.json`:
 
 The badge color is **fixed-neutral by design** — it shows the mix, never a grade.
 
+### Two channels: a human glance, a machine endpoint
+
+Distribution is not bet on human eyeballs alone. Each run also writes a
+**`maintainer-summary.json`** — an aggregate, **name-free** evidence summary
+(counts, authorship tiers, coverage; no per-commit authors or subjects). The
+GitHub Action publishes it next to the badge, so a reviewer — human *or* a
+review-AI — can fetch a stable endpoint:
+
+```text
+https://raw.githubusercontent.com/OWNER/REPO/stillmirror-badges/maintainer-summary.json
+```
+
+The **badge is the human glance**; the **summary is the machine-discoverable
+endpoint**. The full `maintainer-review.json` (with per-commit detail) stays
+local.
+
 ## Labels (a profile over the canonical rubric)
 
 The surface speaks the maintainer's vocabulary; each label maps to a canonical
@@ -151,7 +167,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }       # full history for the review window
-      - uses: haeliotang/stillmirror-review/.github/actions/maintainer-review@stillmirror-review--v0.4.1
+      - uses: haeliotang/stillmirror-review/.github/actions/maintainer-review@stillmirror-review--v0.9.1
         with:
           since: "90d"
           publish-badge: "true"

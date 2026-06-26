@@ -14,8 +14,12 @@ Functional gates:
 - hook capture is sanitized by default and does not store raw prompts.
 - `ledger` produces multi-label `AllocationEntry` records, each with a `receipt`
   (the matched rubric patterns and goal tokens behind its label).
-- `correct` records a human re-label; the next `ledger` run honors it
+- `correct` records a re-label as a named accountable act (`attested_by`,
+  defaulting to git `user.name`); the next `ledger` run honors it
   (`review_state: "corrected"`).
+- `maintainer-review` writes a name-free aggregate `maintainer-summary.json`
+  (no per-commit entries/authors); the GitHub Action publishes it next to the
+  badge as a machine-discoverable evidence endpoint.
 - `ledger` emits a `coverage` object naming what was not captured.
 - `goals add/list` records reviewed or accepted goals, and `add`/`retire`/
   `replace` append `goal_introduced`/`goal_retired`/`goal_replaced` events to

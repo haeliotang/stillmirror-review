@@ -52,8 +52,12 @@ their judgment (the ledger applies corrections by `event_id`):
 "${CLAUDE_PLUGIN_ROOT}/bin/stillmirror-review" correct \
   --event <event_id> \
   --label evaluation \
+  --attested-by "<who is accountable for this correction>" \
   --note "User reclassified this entry."
 ```
+
+A correction is an accountable act — name who made it (a human, or a named
+review process); do not fabricate the reclassification yourself.
 
 After **the user** chooses an alignment label, write it back. The alignment
 record is a named human attestation — the irreducible human act this tool exists

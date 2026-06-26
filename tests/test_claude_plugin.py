@@ -441,6 +441,37 @@ class StillMirrorPluginTests(unittest.TestCase):
             self.assertNotIn("loc", entry)
             self.assertNotIn("lines changed", Path(result["report"]).read_text().casefold())
 
+    def test_correction_is_a_named_accountable_act(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.capture(project, self.edit_payload(project))
+            self.run_script(project, "ledger", "--since", "30d")
+            event_id = next(e["event_id"] for e in self.load_ledger(project)["entries"] if e["source"] == "PostToolUse")
+            record = json.loads(self.run_script(
+                project, "correct", "--event", event_id, "--label", "evaluation", "--attested-by", "ReviewerProcess"
+            ).stdout)["correction"]
+            self.assertEqual(record["attested_by"], "ReviewerProcess")  # by whoever is accountable, named
+
+    def test_maintainer_summary_is_name_free_machine_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+
+            def git(*args: str) -> None:
+                subprocess.run(["git", "-C", str(project), *args], check=True, capture_output=True, text=True)
+
+            git("init")
+            git("config", "user.email", "secret@example.com")
+            git("config", "user.name", "SecretContributor")
+            git("commit", "--allow-empty", "-m", "feat: add a")
+            result = json.loads(self.run_script(project, "maintainer-review", "--since", "365d").stdout)
+            blob = Path(result["summary"]).read_text()
+            summary = json.loads(blob)
+            self.assertIn("maintainer_counts", summary)
+            self.assertIn("canonical_counts", summary)
+            self.assertIn("authorship", summary)
+            self.assertNotIn("entries", summary)  # aggregate only — no per-commit detail
+            self.assertNotIn("SecretContributor", blob)  # name-free: safe to publish for machine consumers
+
     def test_maintainer_review_surfaces_attestation(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             project = Path(temp)

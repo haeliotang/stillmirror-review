@@ -26,6 +26,9 @@ outputs:
   badge-endpoint-url:
     description: "Shields.io endpoint URL for the published badge."
     value: ${{ steps.run.outputs.badge_endpoint_url }}
+  summary-url:
+    description: "Raw URL of the machine evidence summary (name-free aggregate) a reviewer (human or AI) can fetch."
+    value: ${{ steps.run.outputs.summary_url }}
 runs:
   using: "composite"
   steps:
@@ -56,6 +59,10 @@ runs:
         RAW="${GITHUB_SERVER_URL:-https://github.com}"
         RAW="${RAW/github.com/raw.githubusercontent.com}"
         echo "badge_endpoint_url=https://img.shields.io/endpoint?url=${RAW}/${GITHUB_REPOSITORY:-OWNER/REPO}/${SM_BRANCH}/maintainer-badge.json" >> "$GITHUB_OUTPUT"
+        echo "summary_url=${RAW}/${GITHUB_REPOSITORY:-OWNER/REPO}/${SM_BRANCH}/maintainer-summary.json" >> "$GITHUB_OUTPUT"
         if [ "$SM_PUBLISH" = "true" ]; then
-          bash "$SM_ACTION_PATH/publish-badge.sh" "$OUT/maintainer-badge.json" "$SM_BRANCH"
+          # Publish the human badge AND the machine evidence summary (name-free
+          # aggregate) — the badge is the human glance; the summary is the
+          # endpoint a reviewer (human or AI) fetches.
+          bash "$SM_ACTION_PATH/publish-badge.sh" "$OUT/maintainer-badge.json" "$SM_BRANCH" "origin" "$OUT/maintainer-summary.json"
         fi
