@@ -22,6 +22,27 @@ Allocation is evidence.
 Alignment is user review, not a system verdict.
 ```
 
+## How it fits together
+
+One loop, one story — **what you meant ⋈ what happened ⋈ who stood behind it**:
+
+- **Provenance of intent** — `problem set`, `goals add/retire/replace/events`:
+  what you accepted as the goal, and how it changed over time.
+- **Evidence of allocation** — hook capture → `ledger` → `review`: where agent
+  work actually went, each entry carrying a receipt and honest coverage/blind
+  spots.
+- **The human act** — `correct` (fix a label) and `alignment record
+  --attested-by` (a named human stands behind the review). This is the
+  irreducible gate; nothing the tool produces is a verdict.
+- **Triggers** — `review-due` and the opt-in SessionStart nudge, so review
+  actually happens; **Review Debt** maps the unreviewed pile by problem and by
+  thread when many agents run.
+- **Wedge** — `maintainer-review` (+ the GitHub Action): the same lens on a
+  public repo, as a committable badge.
+- **Surfaces** — Claude Code (this plugin) and Claude Desktop (the MCP adapter).
+
+Everything is evidence for *your* review; the only verdict is the one you attest.
+
 ## Install from marketplace
 
 Add this repository as a Claude Code plugin marketplace:
@@ -40,7 +61,7 @@ claude plugin details stillmirror-review
 Expected shape:
 
 ```text
-stillmirror-review 0.6.0
+stillmirror-review 0.7.0
   The review layer for agentic work. Joins accepted-goal provenance with
   allocation evidence for user alignment review.
   Source: stillmirror-review@stillmirror

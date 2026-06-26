@@ -2,7 +2,7 @@
   "manifest_version": "0.1",
   "name": "stillmirror-review",
   "display_name": "StillMirror Review",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Reflective review for agentic work in Claude Desktop: surface where agent work was allocated, see what needs your review, and record your own alignment attestations. Evidence, never a verdict.",
   "author": {
     "name": "Haelio Tang",

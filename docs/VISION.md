@@ -131,6 +131,13 @@ honest:
   unattended output (where to look, not a ranking). A view on the spine, not a
   pillar. **Non-goals (refused):** token / cost capture, and any per-agent
   efficiency, quality, or "best/worst" ranking.
+- **v0.7 — Consolidation & hardening** *(shipped)*: not new capability. The
+  project ran StillMirror on itself; the evidence (feature ~12% vs upkeep ~82% by
+  the wedge; a sprawling ~17-command surface) and Hao's attestation pointed to
+  *tighten, don't expand*. So: one coherent "how it fits together" story (intent
+  provenance ⋈ allocation evidence ⋈ human attestation), dead code trimmed
+  (unused `init` dirs, a dead profile field), and our own attestation dogfooded
+  (signed-off commits + a recorded alignment). The discipline applied to itself.
 - **v1.0 — Objective provenance-lite for agentic projects.**
 - **Deferred** — research / writing drift review.
 

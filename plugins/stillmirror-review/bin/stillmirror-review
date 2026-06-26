@@ -130,34 +130,28 @@ MAINTAINER_PROFILE: dict[str, dict[str, Any]] = {
     "feature": {
         "patterns": ["feat", "feature", "features", "add", "adds", "added", "implement", "implements", "support", "supports", "introduce", "new"],
         "canonical": "core_problem",
-        "display": "feature",
     },
     "bug_fixing": {
         "patterns": ["fix", "fixes", "fixed", "bug", "bugs", "patch", "hotfix", "regression", "crash", "broken", "refactor", "refactors", "refactored"],
         "canonical": "maintenance_debugging",
-        "display": "fixes",
     },
     "release_packaging": {
         "patterns": ["release", "released", "version", "bump", "bumps", "changelog", "publish", "tag", "package", "packaging", "ship", "ships", "shipped"],
         "canonical": "packaging_distribution",
-        "display": "release",
     },
     "infra": {
         "patterns": ["build", "workflow", "docker", "deps", "dependency", "dependencies", "lint", "chore", "config", "cleanup"],
         "canonical": "support_infrastructure",
-        "display": "infra",
     },
     "docs": {
         "patterns": ["docs", "doc", "readme", "documentation", "comment", "comments", "document", "documents", "documented"],
         "canonical": "packaging_distribution",
-        "display": "docs",
     },
     "triage_responding": {
         "patterns": ["respond", "review", "reviews", "address", "addresses", "feedback", "revert", "merge", "triage", "close", "closes"],
         "canonical": "evaluation",
-        "display": "triage",
     },
-    "other": {"patterns": [], "canonical": "exploration", "display": "other"},
+    "other": {"patterns": [], "canonical": "exploration"},
 }
 
 
@@ -227,13 +221,10 @@ def init_project(root: Path, quiet: bool = False) -> None:
     base = sm_dir(root)
     for name in [
         "traces/claude-code",
-        "runs",
         "problems",
         "goals",
         "allocations",
         "alignment",
-        "evidence",
-        "snapshots",
         "reviews",
     ]:
         (base / name).mkdir(parents=True, exist_ok=True)
