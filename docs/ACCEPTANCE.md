@@ -33,12 +33,17 @@ Functional gates:
 - the Triage section groups by goal (with an `unlinked` bucket) and by session,
   surfaces exceptions with `event_id`s, and carries the "surfaced ≠ judged"
   disclaimer (no agent ranking, no trends).
-- `alignment record/list` writes user review records.
+- `alignment record/list` writes user review records, each a named human
+  attestation (`attested_by` + `human_attested`), defaulting the attester to git
+  `user.name`.
 - `maintainer-review` (the wedge) classifies commits git-only into a maintainer
   profile mapped to canonical classes, and writes a report, a neutral-color
   shields badge JSON, and a sidecar with `maintainer_counts` and
   `canonical_counts`; its coverage names the PR/issue/triage blind spot and it
   produces no score or verdict.
+- `maintainer-review` surfaces an `authorship` split (bot / attested / human)
+  with per-commit attestation tiers, as composition not a ranking, and names the
+  signature-not-verified blind spot.
 - redacted sample contains no private paths, raw prompts, or transcript payloads.
 
 Boundary:

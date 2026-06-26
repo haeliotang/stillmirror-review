@@ -1,6 +1,6 @@
 {
   "name": "stillmirror-review",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "The review layer for agentic work. Joins accepted-goal provenance with allocation evidence for user alignment review.",
   "author": {
     "name": "Haelio Tang",

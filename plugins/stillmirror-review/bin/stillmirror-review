@@ -532,7 +532,20 @@ def alignment_path(root: Path) -> Path:
     return sm_dir(root) / "alignment" / "alignment-reviews.jsonl"
 
 
-def record_alignment(root: Path, labels: list[str], note: str, review_file: str) -> dict[str, Any]:
+def default_attester(root: Path) -> str:
+    try:
+        name = subprocess.run(
+            ["git", "-C", str(root), "config", "user.name"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
+        ).stdout.strip()
+        if name:
+            return name
+    except Exception:
+        pass
+    return os.environ.get("USER") or os.environ.get("USERNAME") or "unknown"
+
+
+def record_alignment(root: Path, labels: list[str], note: str, review_file: str, attested_by: str = "") -> dict[str, Any]:
     init_project(root, quiet=True)
     bad = sorted(set(labels) - ALIGNMENT_LABELS)
     if bad:
@@ -547,12 +560,17 @@ def record_alignment(root: Path, labels: list[str], note: str, review_file: str)
             review_ref = str(Path(review_file).expanduser())
     ledger_file = sm_dir(root) / "allocations" / "allocation-ledger.json"
     ledger = load_json(ledger_file, {})
+    # An alignment record is the irreducible human act this whole tool exists to
+    # protect: a named person standing behind a judgment. It must not be
+    # ghost-written by an agent — the attester names who is accountable.
     record = {
         "schema_version": 1,
         "recorded_at": utc_now(),
         "labels": labels,
         "note": note,
         "review_file": review_ref,
+        "attested_by": attested_by.strip() or default_attester(root),
+        "human_attested": True,
         "ledger_generated_at": ledger.get("generated_at") if isinstance(ledger, dict) else None,
         "ledger_entry_count": ledger.get("entry_count") if isinstance(ledger, dict) else None,
     }
@@ -1249,15 +1267,51 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
 UPKEEP_LABELS = ("bug_fixing", "infra", "release_packaging", "docs", "triage_responding")
 
 
+# A bot authoring a change is not, by itself, accountable in the deep sense — a
+# human explicitly standing behind a change is. We surface this as evidence about
+# accountability coverage, never as a ranking or score of any contributor.
+KNOWN_BOT_NAMES = {
+    "dependabot", "dependabot[bot]", "github-actions", "github-actions[bot]",
+    "renovate", "renovate[bot]", "mergify", "mergify[bot]", "greenkeeper",
+    "greenkeeperio-bot", "codecov", "snyk-bot", "imgbot", "pre-commit-ci[bot]",
+    "allcontributors[bot]", "weblate",
+}
+
+
+def author_is_bot(name: str, email: str) -> bool:
+    lname, lemail = name.casefold(), email.casefold()
+    if "[bot]" in lname or "[bot]" in lemail:
+        return True
+    if lname in KNOWN_BOT_NAMES:
+        return True
+    return lemail.split("@", 1)[0] in KNOWN_BOT_NAMES
+
+
+def attestation_tier(name: str, email: str, signature: str, signoff: str) -> str:
+    """Classify a commit's accountability: bot | attested | human.
+
+    ``attested`` = a human who left an explicit accountability marker (a
+    Signed-off-by trailer or a cryptographic signature). ``human`` = a human
+    author with only implicit attestation. ``bot`` = unaccountable by default.
+    Signatures are *detected*, not verified (there are no public keys here).
+    """
+    if author_is_bot(name, email):
+        return "bot"
+    if signoff.strip() or signature not in ("", "N"):
+        return "attested"
+    return "human"
+
+
 def git_commit_files(root: Path, since: dt.datetime, base_range: str = "") -> list[dict[str, Any]]:
-    """Read commits with their changed file paths (git-only, no merges)."""
+    """Read commits with changed files and authorship/attestation (git-only, no merges)."""
     if base_range:
         selector = [f"{base_range}..HEAD"]
     else:
         selector = ["--since", since.isoformat()]
+    fmt = "%x1e%H%x1f%s%x1f%an%x1f%ae%x1f%G?%x1f%(trailers:key=Signed-off-by,valueonly,separator=%x20)"
     try:
         raw = subprocess.run(
-            ["git", "-C", str(root), "log", *selector, "--no-merges", "--name-only", "--format=%x1e%H%x1f%s"],
+            ["git", "-C", str(root), "log", *selector, "--no-merges", "--name-only", f"--format={fmt}"],
             check=True, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
         ).stdout
     except Exception:
@@ -1267,11 +1321,15 @@ def git_commit_files(root: Path, since: dt.datetime, base_range: str = "") -> li
         if not chunk.strip():
             continue
         lines = chunk.split("\n")
-        head = lines[0].split("\x1f", 1)
+        head = lines[0].split("\x1f")
         commits.append(
             {
-                "commit": head[0],
+                "commit": head[0] if head else "",
                 "subject": head[1] if len(head) > 1 else "",
+                "author_name": head[2] if len(head) > 2 else "",
+                "author_email": head[3] if len(head) > 3 else "",
+                "signature": head[4] if len(head) > 4 else "",
+                "signoff": head[5] if len(head) > 5 else "",
                 "files": [line for line in lines[1:] if line.strip()],
             }
         )
@@ -1325,10 +1383,23 @@ def maintainer_review(root: Path, since_value: str, base: str | None = None, out
     classified = []
     maintainer_counts: Counter[str] = Counter()
     canonical_counts: Counter[str] = Counter()
+    attestation: Counter[str] = Counter()
+    authors: set[str] = set()
+    human_authors: set[str] = set()
     for commit in commits:
         subject = str(commit.get("subject") or "")
         files = commit.get("files") or []
         result = classify_commit(subject, files)
+        name = str(commit.get("author_name") or "")
+        tier = attestation_tier(
+            name, str(commit.get("author_email") or ""),
+            str(commit.get("signature") or ""), str(commit.get("signoff") or ""),
+        )
+        attestation[tier] += 1
+        if name:
+            authors.add(name)
+            if tier != "bot":
+                human_authors.add(name)
         maintainer_counts[result["label"]] += 1
         canonical_counts[result["canonical"]] += 1
         classified.append(
@@ -1339,11 +1410,16 @@ def maintainer_review(root: Path, since_value: str, base: str | None = None, out
                 "label": result["label"],
                 "canonical": result["canonical"],
                 "reason": result["reason"],
+                "author": name,
+                "attestation": tier,
             }
         )
     total = sum(maintainer_counts.values()) or 1
     feature_pct = round(maintainer_counts.get("feature", 0) * 100 / total)
     upkeep_pct = round(sum(maintainer_counts.get(label, 0) for label in UPKEEP_LABELS) * 100 / total)
+    bot_pct = round(attestation.get("bot", 0) * 100 / total)
+    attested_pct = round(attestation.get("attested", 0) * 100 / total)
+    human_pct = round(attestation.get("human", 0) * 100 / total)
     # The badge answers the maintainer's one question in a glance: advancing the
     # core vs upkeep. `other` is shown in the full report, not forced into upkeep.
     message = f"feature {feature_pct}% · upkeep {upkeep_pct}%" if commits else "no commits in window"
@@ -1365,7 +1441,7 @@ def maintainer_review(root: Path, since_value: str, base: str | None = None, out
         f"- Commits analysed: {len(commits)}",
         "",
         "Evidence for the maintainer's own review, not a verdict. It reads only git",
-        "commit subjects.",
+        "commit subjects, changed files, and authorship.",
         "",
         "## Coverage & Blind Spots",
         "",
@@ -1386,6 +1462,21 @@ def maintainer_review(root: Path, since_value: str, base: str | None = None, out
             "",
             f"For your own judgement: feature {feature_pct}% · upkeep {upkeep_pct}% "
             "(triage is undercounted — see Coverage).",
+            "",
+            "## Authorship & accountability",
+            "",
+            "Composition, not a contributor ranking. As agents make contributions cheap",
+            "and abundant, the scarce signal is how much of this work carries a human's",
+            "explicit accountability — a sign-off or a signature.",
+            "",
+            f"- Commits in window: {len(commits)}",
+            f"- From bots: {attestation.get('bot', 0)} ({bot_pct}%)",
+            f"- Human-attested (sign-off or signature): {attestation.get('attested', 0)} ({attested_pct}%)",
+            f"- Human, no explicit attestation: {attestation.get('human', 0)} ({human_pct}%)",
+            f"- Distinct authors: {len(authors)} ({len(human_authors)} human)",
+            "",
+            "_Signatures are detected, not cryptographically verified here. This is"
+            " evidence about accountability coverage, not a judgment of any contributor._",
             "",
             "## Badge",
             "",
@@ -1412,11 +1503,19 @@ def maintainer_review(root: Path, since_value: str, base: str | None = None, out
             "commits": len(commits),
             "maintainer_counts": dict(maintainer_counts),
             "canonical_counts": dict(canonical_counts),
+            "authorship": {
+                "bot": attestation.get("bot", 0),
+                "attested": attestation.get("attested", 0),
+                "human": attestation.get("human", 0),
+                "distinct_authors": len(authors),
+                "distinct_human_authors": len(human_authors),
+            },
             "coverage": {
-                "source": "git commit subjects only",
+                "source": "git commit subjects, changed files, and authorship",
                 "not_captured": [
                     "Pull-request and issue triage / responding.",
                     "Review discussion and the effort or impact behind a commit.",
+                    "Whether a detected signature is cryptographically valid.",
                 ],
             },
             "entries": classified,
@@ -1426,6 +1525,7 @@ def maintainer_review(root: Path, since_value: str, base: str | None = None, out
         "commits": len(commits),
         "maintainer_counts": dict(maintainer_counts),
         "canonical_counts": dict(canonical_counts),
+        "authorship": dict(attestation),
         "badge_markdown": badge_markdown,
         "report": str(report_path),
         "badge": str(badge_path),
@@ -1485,6 +1585,7 @@ def main() -> int:
     alignment_record.add_argument("--label", action="append", required=True, choices=sorted(ALIGNMENT_LABELS))
     alignment_record.add_argument("--note", default="")
     alignment_record.add_argument("--review-file", default="")
+    alignment_record.add_argument("--attested-by", default="", help="name of the human standing behind this review (defaults to git user.name)")
     alignment_sub.add_parser("list")
     args = parser.parse_args()
     root = project_root()
@@ -1533,7 +1634,7 @@ def main() -> int:
         print(json.dumps({"correction": record, "output": str(corrections_path(root))}, ensure_ascii=False, indent=2))
     elif args.command == "alignment":
         if args.alignment_command == "record":
-            record = record_alignment(root, args.label, args.note, args.review_file)
+            record = record_alignment(root, args.label, args.note, args.review_file, args.attested_by)
             print(json.dumps({"record": record, "output": str(alignment_path(root))}, ensure_ascii=False, indent=2))
         elif args.alignment_command == "list":
             print(json.dumps({"records": list_alignment(root)}, ensure_ascii=False, indent=2))

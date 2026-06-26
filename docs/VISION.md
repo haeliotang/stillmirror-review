@@ -103,15 +103,37 @@ honest:
   `maintainer-review` command — capture-free, git-only, landing as a committable
   **badge + report** with a canonical sidecar — plus a **composite GitHub Action**
   that auto-refreshes the badge on a dedicated orphan branch (the self-propagating
-  loop). Distribution is designed in (the badge is the ad). See
-  [MAINTAINER-REVIEW.md](MAINTAINER-REVIEW.md). *Deferred:* a Marketplace listing,
-  per-PR comments, PR/issue enrichment (a flood to be triaged, not dumped), and an
-  **anonymized** "State of OSS Maintenance" aggregate report.
+  loop), and an **authorship & accountability** view (bot / human-attested /
+  human) that surfaces how much of a flood carries explicit human accountability,
+  as composition, never a ranking. Distribution is designed in (the badge is the
+  ad). See [MAINTAINER-REVIEW.md](MAINTAINER-REVIEW.md). *Deferred:* a Marketplace
+  listing, per-PR comments, PR/issue enrichment (a flood to be triaged, not
+  dumped), and an **anonymized** "State of OSS Maintenance" aggregate report.
 - **v0.5 — Claude Desktop MCPB review adapter**: read `.stillmirror/` for
   reflective, non-coding review sessions.
 - **v0.6 — Multi-agent budget *view***: a view on the same spine, not a pillar.
 - **v1.0 — Objective provenance-lite for agentic projects.**
 - **Deferred** — research / writing drift review.
+
+## The accountability floor
+
+Push the scarcity chain to its end. Cloud metering made tokens scarce;
+multi-agent made human attention scarce; abundant on-device AI makes even
+*review* automatable. At each step the scarce resource migrates toward the human
+— and it bottoms out at something that is not a resource at all: **accountability,
+a named human consequentially standing behind an authorization.** You cannot make
+it abundant, because it is a *relation*, not a quantity; "scaling" it by
+automating judgment does not scale it, it *deletes* it — leaving oversight theater
+(scores, badges, auto-approvals) over an absence of responsibility.
+
+So StillMirror's deepest discipline is to **refuse to become the reviewer** — to
+stay the instrument that makes a human review faster, never the substitute that
+reviews for them. The human-act gates (`alignment record`, `correct`) are the
+whole point; they are named human attestations and must never be ghost-written by
+an agent. As everything else becomes automatable, **human-attested provenance**
+is the signal that keeps its value — the hand-signature among infinite forgeries.
+This is also why the avoid-list holds: a score is the on-ramp to automated,
+unaccountable judgment, so refusing scores is refusing to build that ramp.
 
 ## What StillMirror will not do
 

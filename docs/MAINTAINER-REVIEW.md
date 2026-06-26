@@ -71,6 +71,26 @@ only `.github/` → infra); then whole-word subject keywords. Genuinely ambiguou
 commits (e.g. a code change with a vague subject) stay `other` rather than being
 force-fit into a bucket.
 
+## Authorship & accountability
+
+As agents make contributions cheap and abundant, the scarce signal is no longer
+*how much* was produced but *how much carries a human's explicit accountability*.
+The report and sidecar split commits into three tiers:
+
+| tier | meaning |
+|---|---|
+| `bot` | authored by a bot (`*[bot]`, Dependabot, CI bots, …) — unaccountable by default |
+| `attested` | a human who left an explicit marker: a `Signed-off-by` trailer or a signature |
+| `human` | a human author with only implicit attestation |
+
+This is shown as **composition, not a contributor ranking** — no leaderboard, no
+per-person score. Signatures are *detected*, not cryptographically verified here
+(there are no public keys). The point is the same one StillMirror makes
+everywhere: in a flood of automatable output, a named human standing behind a
+change is the signal that keeps its value — so a StillMirror **alignment record**
+is itself a named human attestation (`alignment record --attested-by "<name>"`)
+and must never be ghost-written by an agent.
+
 ## What it does not do (values boundary)
 
 - **Evidence, not verdict.** No score, no grade, no "you're drowning" language.
@@ -100,7 +120,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }       # full history for the review window
-      - uses: haeliotang/stillmirror-review/.github/actions/maintainer-review@stillmirror-review--v0.3.4
+      - uses: haeliotang/stillmirror-review/.github/actions/maintainer-review@stillmirror-review--v0.3.5
         with:
           since: "90d"
           publish-badge: "true"

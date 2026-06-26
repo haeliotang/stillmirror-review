@@ -55,10 +55,14 @@ their judgment (the ledger applies corrections by `event_id`):
   --note "User reclassified this entry."
 ```
 
-After the user chooses an alignment label, write it back with:
+After **the user** chooses an alignment label, write it back. The alignment
+record is a named human attestation — the irreducible human act this tool exists
+to protect. Do not invent the label or the judgment yourself; record only what
+the user decided, and name them as the attester:
 
 ```sh
 "${CLAUDE_PLUGIN_ROOT}/bin/stillmirror-review" alignment record \
   --label necessary_support \
+  --attested-by "<the user's name>" \
   --note "User confirmed these allocations support the accepted goal."
 ```

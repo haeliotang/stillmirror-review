@@ -414,6 +414,45 @@ class StillMirrorPluginTests(unittest.TestCase):
             self.assertIn("feature", badge["message"])
             self.assertIn("upkeep", badge["message"])  # answers the maintainer's core question
 
+    def test_maintainer_review_surfaces_attestation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+
+            def git(*args: str) -> None:
+                subprocess.run(["git", "-C", str(project), *args], check=True, capture_output=True, text=True)
+
+            git("init")
+            git("config", "user.email", "t@t.co")
+            git("config", "user.name", "Hao")
+            (project / "a.py").write_text("a\n")
+            git("add", "-A")
+            git("commit", "-m", "feat: add a")  # human, no explicit attestation
+            (project / "b.py").write_text("b\n")
+            git("add", "-A")
+            git("commit", "-s", "-m", "fix: b")  # human-attested via Signed-off-by
+            git("commit", "--allow-empty", "--author=dependabot[bot] <support@dependabot.com>", "-m", "chore: bump deps")  # bot
+
+            result = json.loads(self.run_script(project, "maintainer-review", "--since", "365d").stdout)
+            sidecar = json.loads(Path(result["sidecar"]).read_text())
+            self.assertEqual(sidecar["authorship"]["bot"], 1)
+            self.assertEqual(sidecar["authorship"]["attested"], 1)
+            self.assertEqual(sidecar["authorship"]["human"], 1)
+            self.assertEqual(sidecar["authorship"]["distinct_human_authors"], 1)
+            tiers = {e["subject"]: e["attestation"] for e in sidecar["entries"]}
+            self.assertEqual(tiers["chore: bump deps"], "bot")
+            self.assertEqual(tiers["fix: b"], "attested")
+            report = Path(result["report"]).read_text()
+            self.assertIn("## Authorship & accountability", report)
+            self.assertIn("not a contributor ranking", report)
+
+    def test_alignment_record_is_named_human_attestation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            result = self.run_script(project, "alignment", "record", "--label", "necessary_support", "--attested-by", "Hao")
+            record = json.loads(result.stdout)["record"]
+            self.assertEqual(record["attested_by"], "Hao")
+            self.assertTrue(record["human_attested"])
+
     def test_publish_badge_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
