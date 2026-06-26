@@ -152,6 +152,25 @@ honest:
   accountable attestation as terminus. **Non-goals:** an opaque LLM that renders
   the verdict. **Deferred:** per-agent/per-session focus (v0.8 is a global
   time-window; concurrent-agent attribution is the multi-agent extension).
+- **v0.9 — Reframe for the no-human-in-the-loop future** *(shipped)*. A route
+  review under the premise that most people will *not* review (abdication, or a
+  reviewer-AI) found a clean split: the **substrate** (ledger, receipts,
+  coverage, provenance, attestation, MCP, `focus`) is consumer-agnostic and
+  AI-ready; several **interface** choices assumed a human consumer and deviated.
+  v0.9 corrects by reframe, not rebuild:
+  - the SessionStart nudge is now a **consumer-agnostic signal** — addressed to
+    whatever attends (a human *or* a review process), with the same state
+    queryable as JSON via `review-due` for automation;
+  - **abdication is made visible** — an empty judgment seat (work accumulating
+    with no attestation ever) is surfaced as a finding (`review-due.ever_attested`
+    and a prominent Review Debt callout), not papered over;
+  - the **revised mainline hypothesis**: not "keep a *human* in the judgment
+    seat" but **"ensure an accountable reviewer (a human now, possibly an
+    accountable AI past the moral-agent threshold) sits on auditable evidence,
+    with a named human attestation as terminus — and make abdication visible
+    rather than fill the empty seat."** The human narrows to the irreducible
+    accountability terminus; the moment-to-moment reviewing may be a human or an
+    AI consuming the same auditable substrate.
 - **v1.0 — Objective provenance-lite for agentic projects.**
 - **Deferred** — research / writing drift review.
 

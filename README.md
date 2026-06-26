@@ -44,7 +44,9 @@ One loop, one story — **what you meant ⋈ what happened ⋈ who stood behind 
   public repo, as a committable badge.
 - **Surfaces** — Claude Code (this plugin) and Claude Desktop (the MCP adapter).
 
-Everything is evidence for *your* review; the only verdict is the one you attest.
+Everything is **auditable evidence** for review — yours today, a review process's
+tomorrow; the only verdict is a **named human attestation**, and an empty
+judgment seat (work no one has stood behind) is surfaced as a finding, not hidden.
 
 ## Install from marketplace
 
@@ -64,7 +66,7 @@ claude plugin details stillmirror-review
 Expected shape:
 
 ```text
-stillmirror-review 0.8.0
+stillmirror-review 0.9.0
   The review layer for agentic work. Joins accepted-goal provenance with
   allocation evidence for user alignment review.
   Source: stillmirror-review@stillmirror

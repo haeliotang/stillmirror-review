@@ -609,6 +609,32 @@ class StillMirrorPluginTests(unittest.TestCase):
             ledger2 = self.load_ledger(project)
             self.assertGreaterEqual(ledger2["coverage"]["inferred_entries"], 1)
 
+    def test_abdication_is_visible_and_nudge_is_consumer_agnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.capture(project, self.edit_payload(project))  # work accrues, nothing attested
+            due = json.loads(self.run_script(project, "review-due", "--threshold", "1").stdout)
+            self.assertFalse(due["ever_attested"])  # an empty judgment seat
+
+            self.run_script(project, "review", "--since", "30d")
+            text = next((project / ".stillmirror" / "reviews").glob("*-project-alignment-review.md")).read_text()
+            self.assertIn("No one has stood behind this project's work yet", text)
+
+            # The nudge addresses a human OR a review process — not "your last review".
+            payload = json.dumps({"hook_event_name": "SessionStart", "cwd": str(project)})
+            nudged = subprocess.run(
+                [str(REVIEW), "review-due", "--nudge", "--threshold", "1"],
+                cwd=project, input=payload, capture_output=True, text=True, encoding="utf-8",
+                env={**os.environ, "STILLMIRROR_SESSION_NUDGE": "1"},
+            )
+            self.assertIn("review process", nudged.stdout)
+            self.assertNotIn("your last review", nudged.stdout)
+
+            # A named human attestation fills the seat.
+            self.run_script(project, "alignment", "record", "--label", "necessary_support", "--attested-by", "Hao")
+            after = json.loads(self.run_script(project, "review-due", "--threshold", "1").stdout)
+            self.assertTrue(after["ever_attested"])
+
     def test_task_lifecycle_events_are_captured_as_control_events(self) -> None:
         # TaskCreated / TaskCompleted are real Claude Code hooks (confirmed by the
         # project's own self-review, which caught them being dropped). Capture them

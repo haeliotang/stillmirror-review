@@ -32,7 +32,10 @@ Functional gates:
   `sessions_touched` since the last alignment record, and `due` flips on
   threshold.
 - the SessionStart `review-due --nudge` hook is silent unless
-  `STILLMIRROR_SESSION_NUDGE=1` and a review is due.
+  `STILLMIRROR_SESSION_NUDGE=1` and a review is due; its message is
+  consumer-agnostic (addressed to a human *or* a review process).
+- `review-due` reports `ever_attested`, and `review` surfaces an empty judgment
+  seat (work accumulating with no attestation) as a prominent finding.
 - `review --base <ref>` scopes the window to a branch's commits.
 - the Triage section groups by goal (with an `unlinked` bucket) and by session,
   surfaces exceptions with `event_id`s, and carries the "surfaced ≠ judged"

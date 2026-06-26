@@ -933,6 +933,9 @@ def compute_review_due(root: Path, threshold: int) -> dict[str, Any]:
         "due": due,
         "threshold": threshold,
         "last_reviewed_at": reference.isoformat().replace("+00:00", "Z") if reference else None,
+        # Has anyone ever stood behind this project's work? An empty seat is a
+        # finding, not a default — surfaced for any consumer, human or automation.
+        "ever_attested": reference is not None,
         "new_allocations": len(new_allocations),
         "new_goal_events": len(goal_events),
         "sessions_touched": len(sessions),
@@ -951,8 +954,9 @@ def nudge_threshold(explicit: int | None) -> int:
 def run_nudge(threshold: int) -> int:
     """SessionStart hook body: stay silent unless opted in AND a review is due.
 
-    Triggers at a *human* boundary (a new session), aggregating all agent work
-    accumulated since the last review into a single quiet line.
+    Emits a consumer-agnostic "review is due" signal — addressed to whatever
+    attends (a human, or a review process), not assuming a human is in the loop.
+    The same state is queryable as JSON via `review-due` for automation.
     """
     if os.environ.get("STILLMIRROR_SESSION_NUDGE") != "1":
         return 0
@@ -973,10 +977,13 @@ def run_nudge(threshold: int) -> int:
         return 0
     if not status["due"]:
         return 0
+    seat = "" if status.get("ever_attested") else " No one has stood behind this work yet."
     message = (
         f"StillMirror: {status['new_allocations']} allocation(s) across "
-        f"{status['sessions_touched']} session(s) and {status['new_goal_events']} "
-        f"goal event(s) since your last review — run /stillmirror-review:review"
+        f"{status['sessions_touched']} thread(s) and {status['new_goal_events']} "
+        f"goal event(s) are unattested since the last attestation.{seat} A reviewer — "
+        f"you or a review process — should attend; nothing is settled until someone "
+        f"accountable stands behind it. Run /stillmirror-review:review."
     )
     print(
         json.dumps(
@@ -1245,6 +1252,17 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
             f"- Agent threads (sessions) since: {debt['sessions_touched']}",
         ]
     )
+    # Make abdication visible: an empty judgment seat is the finding, not a default.
+    if last_att is None and debt["new_allocations"] > 0:
+        lines.extend(
+            [
+                "",
+                f"> **No one has stood behind this project's work yet.** "
+                f"{debt['new_allocations']} allocation(s) across {debt['sessions_touched']} "
+                "thread(s) are unattended. An empty judgment seat is itself the finding —"
+                " review and attest, or name who is accountable.",
+            ]
+        )
     if fleet["owed"] > 0:
         lines.extend(["", "Where your review is owed (by problem):"])
         for label in RUBRIC:
