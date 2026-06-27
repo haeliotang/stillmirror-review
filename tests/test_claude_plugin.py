@@ -689,6 +689,71 @@ class StillMirrorPluginTests(unittest.TestCase):
             self.assertIn("pre-0.9.3", text)
             self.assertIsNone(self.load_ledger(project)["coverage"]["root_accountable"])
 
+    def _proposals(self, project: Path) -> list:
+        path = project / ".stillmirror" / "alignment" / "proposals.jsonl"
+        return [json.loads(l) for l in path.read_text().splitlines() if l.strip()] if path.exists() else []
+
+    def test_propose_is_a_draft_not_an_attestation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.run_script(project, "alignment", "propose", "--label", "necessary_support",
+                            "--note", "draft read", "--drafted-by", "assistant")
+            props = self._proposals(project)
+            self.assertEqual(props[0]["status"], "pending")
+            self.assertFalse(props[0]["human_attested"])
+            # The seat is still empty — a draft does not attest.
+            status = json.loads(self.run_script(project, "review-due").stdout)
+            self.assertFalse(status["ever_attested"])
+            self.assertTrue(status["pending_proposal"])
+            self.run_script(project, "review", "--since", "30d")
+            text = next((project / ".stillmirror" / "reviews").glob("*-project-alignment-review.md")).read_text()
+            self.assertIn("awaits your ratification", text)
+            # a draft must name who drafted it
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.run_script(project, "alignment", "propose", "--label", "noise", "--drafted-by", "")
+
+    def test_ratify_accept_attests_with_both_names(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.run_script(project, "alignment", "propose", "--label", "necessary_support",
+                            "--label", "exploration", "--note", "draft", "--drafted-by", "assistant")
+            self.run_script(project, "alignment", "ratify", "--decision", "accept", "--attested-by", "Hao")
+            recs = json.loads(self.run_script(project, "alignment", "list").stdout)["records"]
+            self.assertEqual(recs[-1]["proposed_by"], "assistant")  # who drafted
+            self.assertEqual(recs[-1]["attested_by"], "Hao")        # who stood behind it
+            self.assertEqual(recs[-1]["ratification"], "accept")
+            self.assertTrue(recs[-1]["human_attested"])
+            self.assertEqual(sorted(recs[-1]["labels"]), ["exploration", "necessary_support"])
+            status = json.loads(self.run_script(project, "review-due").stdout)
+            self.assertTrue(status["ever_attested"])      # seat now filled
+            self.assertFalse(status["pending_proposal"])  # draft resolved
+            # ratify requires a named human
+            self.run_script(project, "alignment", "propose", "--label", "noise", "--drafted-by", "assistant")
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.run_script(project, "alignment", "ratify", "--decision", "accept", "--attested-by", "")
+
+    def test_ratify_amend_overrides_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.run_script(project, "alignment", "propose", "--label", "necessary_support", "--drafted-by", "assistant")
+            self.run_script(project, "alignment", "ratify", "--decision", "amend",
+                            "--label", "operational_drift", "--note", "actually drift", "--attested-by", "Hao")
+            recs = json.loads(self.run_script(project, "alignment", "list").stdout)["records"]
+            self.assertEqual(recs[-1]["labels"], ["operational_drift"])  # human's label, not the draft's
+            self.assertEqual(recs[-1]["ratification"], "amend")
+
+    def test_ratify_reject_leaves_seat_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.run_script(project, "alignment", "propose", "--label", "exploration", "--drafted-by", "assistant")
+            out = json.loads(self.run_script(project, "alignment", "ratify", "--decision", "reject", "--attested-by", "Hao").stdout)
+            self.assertFalse(out["attested"])  # a rejection is not an attestation
+            self.assertEqual(json.loads(self.run_script(project, "alignment", "list").stdout)["records"], [])
+            status = json.loads(self.run_script(project, "review-due").stdout)
+            self.assertFalse(status["ever_attested"])      # seat stays empty — abdication visible
+            self.assertFalse(status["pending_proposal"])   # the proposal is resolved (rejected)
+            self.assertEqual(self._proposals(project)[0]["status"], "rejected")
+
     def test_maintainer_review_pr_issues_degrades_gracefully(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             project = Path(temp)
@@ -746,16 +811,23 @@ class StillMirrorPluginTests(unittest.TestCase):
                     {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "review_due", "arguments": {"project_path": project}}},
                     {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "record_alignment", "arguments": {"project_path": project, "labels": ["necessary_support"], "attested_by": "Hao"}}},
                     {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "record_alignment", "arguments": {"project_path": project, "labels": ["necessary_support"], "attested_by": ""}}},
+                    {"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "propose_alignment", "arguments": {"project_path": project, "labels": ["exploration"], "note": "draft", "drafted_by": "assistant"}}},
+                    {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "ratify_alignment", "arguments": {"project_path": project, "decision": "accept", "attested_by": "Hao"}}},
+                    {"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {"name": "ratify_alignment", "arguments": {"project_path": project, "decision": "accept", "attested_by": ""}}},
                 ]
             )
             self.assertEqual(responses[1]["result"]["serverInfo"]["name"], "stillmirror-review")
             tool_names = {t["name"] for t in responses[2]["result"]["tools"]}
-            self.assertEqual(tool_names, {"review_due", "review", "record_alignment"})
+            self.assertEqual(tool_names, {"review_due", "review", "record_alignment", "propose_alignment", "ratify_alignment"})
             self.assertIn('"due"', responses[3]["result"]["content"][0]["text"])  # evidence, read-only
             self.assertIn("Hao", responses[4]["result"]["content"][0]["text"])  # named human attestation recorded
             # The assistant cannot attest on the human's behalf: a missing attester is refused.
             self.assertTrue(responses[5]["result"]["isError"])
             self.assertIn("attested_by", responses[5]["result"]["content"][0]["text"])
+            # Assisted attestation: the assistant drafts, then the named human ratifies.
+            self.assertIn("pending", responses[6]["result"]["content"][0]["text"])  # a draft, not an attestation
+            self.assertIn("assistant", responses[7]["result"]["content"][0]["text"])  # ratified record carries proposed_by
+            self.assertTrue(responses[8]["result"]["isError"])  # cannot ratify without naming the human
 
     def test_focus_declares_ground_truth_linkage_over_keyword_guess(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

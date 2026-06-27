@@ -41,9 +41,13 @@ One loop, one story — **what you meant ⋈ what happened ⋈ who stood behind 
 - **Evidence of allocation** — hook capture → `ledger` → `review`: where agent
   work actually went, each entry carrying a receipt and honest coverage/blind
   spots.
-- **The human act** — `correct` (fix a label) and `alignment record
-  --attested-by` (a named human stands behind the review). This is the
-  irreducible gate; nothing the tool produces is a verdict.
+- **The human act** — `correct` (fix a label) and the attestation. To keep that
+  act cheap without forging it, an AI **drafts** it (`alignment propose
+  --drafted-by`) and the human **ratifies** in plain terms (`alignment ratify
+  --decision accept|amend|reject --attested-by`) — the 7 labels stay hidden as the
+  draft's machine vocabulary; a draft is *not* an attestation. (A human can still
+  author directly with `alignment record --attested-by`.) This is the irreducible
+  gate; nothing the tool produces is a verdict.
 - **Triggers** — `review-due` and the opt-in SessionStart nudge, so review
   actually happens; **Review Debt** maps the unreviewed pile by problem, by
   session, and **by agent** (real subagent identity, from the captured
@@ -75,7 +79,7 @@ claude plugin details stillmirror-review
 Expected shape:
 
 ```text
-stillmirror-review 0.9.3
+stillmirror-review 0.9.4
   The review layer for agentic work. Joins accepted-goal provenance with
   allocation evidence for user alignment review.
   Source: stillmirror-review@stillmirror

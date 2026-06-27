@@ -12,13 +12,25 @@ It is a **thin adapter over the CLI** — it shells out to `stillmirror-review`,
 so it inherits all of its logic and its discipline. Stdlib-only JSON-RPC over
 stdio; no new dependencies.
 
-## What it exposes (3 tools)
+## What it exposes (5 tools)
 
 | tool | what it does |
 |---|---|
-| `review_due` | read-only: unreviewed allocations, new goal events, and agent threads since the last human-attested review |
+| `review_due` | read-only: unreviewed allocations, new goal events, top-level sessions and distinct subagents, and whether a drafted attestation awaits ratification, since the last human-attested review |
 | `review` | returns the full Project Alignment Review (coverage, review debt, goal provenance, triage, allocation evidence) — **evidence, not a verdict** |
 | `record_alignment` | records the **user's own** attestation — labels the user chose, named to the accountable human |
+| `propose_alignment` | the assistant **drafts** an attestation (labels + plain note) for the user to ratify — a draft, **not** an attestation; the seat stays empty until ratified |
+| `ratify_alignment` | records the user's **accept / amend / reject** of a draft — the irreducible human act; accept/amend carry both `proposed_by` (assistant) and `attested_by` (user); reject leaves the seat empty |
+
+### Assisted attestation — draft, then ask in plain terms
+
+The friction of operating a 7-label taxonomy is what makes a human abdicate. So
+the assistant **drafts** the labels + reasoning (`propose_alignment`), then asks
+the user a plain-language question — *does this look right, is something off, or
+can't you tell?* — **never showing the label list** — and records their decision
+with `ratify_alignment`. The labels are the draft's machine vocabulary; the user's
+act is the plain accept/amend/reject. A draft is not an attestation, and the
+assistant must never ratify on the user's behalf.
 
 ## The values line, enforced at the tool boundary
 

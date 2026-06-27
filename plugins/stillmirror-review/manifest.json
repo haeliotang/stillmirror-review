@@ -2,7 +2,7 @@
   "manifest_version": "0.1",
   "name": "stillmirror-review",
   "display_name": "StillMirror Review",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "Reflective review for agentic work in Claude Desktop: surface where agent work was allocated, see what needs your review, and record your own alignment attestations. Evidence, never a verdict.",
   "author": {
     "name": "Haelio Tang",
@@ -30,6 +30,14 @@
     {
       "name": "record_alignment",
       "description": "Record the user's own alignment attestation — never fabricated by the assistant; names the accountable human."
+    },
+    {
+      "name": "propose_alignment",
+      "description": "Draft an alignment attestation for the user to ratify — a draft, not an attestation; the seat stays empty until the user ratifies."
+    },
+    {
+      "name": "ratify_alignment",
+      "description": "Record the user's ratification of a drafted proposal — accept / amend / reject; the irreducible human act, never on their behalf."
     }
   ]
 }

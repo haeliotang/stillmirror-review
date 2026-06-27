@@ -709,40 +709,57 @@ def accountability_label(block: Any) -> str:
     return f"{block.get('set_by') or 'unknown'} ({block.get('tier')})"
 
 
-def record_alignment(root: Path, labels: list[str], note: str, review_file: str, attested_by: str = "") -> dict[str, Any]:
-    init_project(root, quiet=True)
+def _validate_labels(labels: list[str]) -> None:
     bad = sorted(set(labels) - ALIGNMENT_LABELS)
     if bad:
         raise SystemExit(f"unknown alignment labels: {', '.join(bad)}")
     if not labels:
         raise SystemExit("at least one alignment label is required")
-    review_ref = ""
-    if review_file:
-        try:
-            review_ref = str(Path(review_file).expanduser().resolve().relative_to(root.resolve()))
-        except Exception:
-            review_ref = str(Path(review_file).expanduser())
-    ledger_file = sm_dir(root) / "allocations" / "allocation-ledger.json"
-    ledger = load_json(ledger_file, {})
-    # An alignment record is the irreducible human act this whole tool exists to
-    # protect: a named person standing behind a judgment. It must not be
-    # ghost-written by an agent — the attester names who is accountable.
+
+
+def _review_ref(root: Path, review_file: str) -> str:
+    if not review_file:
+        return ""
+    try:
+        return str(Path(review_file).expanduser().resolve().relative_to(root.resolve()))
+    except Exception:
+        return str(Path(review_file).expanduser())
+
+
+def _write_alignment(
+    root: Path, labels: list[str], note: str, review_file: str, attested_by: str,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Write a human-attested alignment record. The only writer of
+    ``alignment-reviews.jsonl`` — so that file means 'a human stood behind this'."""
+    init_project(root, quiet=True)
+    _validate_labels(labels)
+    ledger = load_json(sm_dir(root) / "allocations" / "allocation-ledger.json", {})
     record = {
         "schema_version": 1,
         "recorded_at": utc_now(),
         "labels": labels,
         "note": note,
-        "review_file": review_ref,
+        "review_file": _review_ref(root, review_file),
         "attested_by": attested_by.strip() or default_attester(root),
         "human_attested": True,
         "ledger_generated_at": ledger.get("generated_at") if isinstance(ledger, dict) else None,
         "ledger_entry_count": ledger.get("entry_count") if isinstance(ledger, dict) else None,
     }
+    if extra:
+        record.update(extra)
     path = alignment_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
     return record
+
+
+def record_alignment(root: Path, labels: list[str], note: str, review_file: str, attested_by: str = "") -> dict[str, Any]:
+    # An alignment record is the irreducible human act this whole tool exists to
+    # protect: a named person standing behind a judgment. It must not be
+    # ghost-written by an agent — the attester names who is accountable.
+    return _write_alignment(root, labels, note, review_file, attested_by)
 
 
 def list_alignment(root: Path) -> list[dict[str, Any]]:
@@ -763,11 +780,128 @@ def list_alignment(root: Path) -> list[dict[str, Any]]:
 
 
 def last_attestation(root: Path) -> dict[str, Any] | None:
-    """The most recent alignment record — the last time a human stood behind a review."""
-    records = list_alignment(root)
-    attested = [record for record in records if record.get("human_attested")]
-    chosen = attested or records
-    return chosen[-1] if chosen else None
+    """The most recent record a human stood behind. Never falls back to a
+    non-attested record — a draft is not an attestation."""
+    attested = [record for record in list_alignment(root) if record.get("human_attested")]
+    return attested[-1] if attested else None
+
+
+# --- Assisted attestation (v0.9.4): an AI drafts, a human ratifies ----------
+# A *proposal* is a drafted attestation, kept in a separate file so it can never
+# be mistaken for a human standing behind the work. Only a human ratify writes to
+# alignment-reviews.jsonl, so Review Debt / ever_attested stay honest.
+
+def proposals_path(root: Path) -> Path:
+    return sm_dir(root) / "alignment" / "proposals.jsonl"
+
+
+def list_proposals(root: Path) -> list[dict[str, Any]]:
+    path = proposals_path(root)
+    if not path.exists():
+        return []
+    out: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            out.append(value)
+    return out
+
+
+def append_proposal(root: Path, labels: list[str], note: str, drafted_by: str, review_file: str = "") -> dict[str, Any]:
+    """A *draft* attestation an AI consumer proposes — NOT an attestation. It does
+    not reset Review Debt or set ever_attested; only a human ratify does."""
+    init_project(root, quiet=True)
+    _validate_labels(labels)
+    if not drafted_by.strip():
+        raise SystemExit(
+            "--drafted-by is required — name who drafted this proposal (e.g. the "
+            "assistant); a draft is not an attestation"
+        )
+    ledger = load_json(sm_dir(root) / "allocations" / "allocation-ledger.json", {})
+    proposal = {
+        "schema_version": 1,
+        "proposed_at": utc_now(),
+        "status": "pending",
+        "labels": labels,
+        "note": note,
+        "drafted_by": drafted_by.strip(),
+        "human_attested": False,
+        "review_file": _review_ref(root, review_file),
+        "ledger_generated_at": ledger.get("generated_at") if isinstance(ledger, dict) else None,
+        "ledger_entry_count": ledger.get("entry_count") if isinstance(ledger, dict) else None,
+    }
+    proposal["proposal_id"] = short_hash(json.dumps(proposal, sort_keys=True, ensure_ascii=False))
+    path = proposals_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(proposal, ensure_ascii=False, sort_keys=True) + "\n")
+    return proposal
+
+
+def latest_pending_proposal(root: Path, proposal_id: str = "") -> dict[str, Any] | None:
+    pending = [p for p in list_proposals(root) if p.get("status") == "pending"]
+    if proposal_id:
+        match = [p for p in pending if str(p.get("proposal_id") or "").startswith(proposal_id)]
+        return match[-1] if match else None
+    return pending[-1] if pending else None
+
+
+def _set_proposal_status(root: Path, proposal_id: str, status: str) -> None:
+    proposals = list_proposals(root)
+    touched = False
+    for p in proposals:
+        if p.get("proposal_id") == proposal_id and p.get("status") == "pending":
+            p["status"] = status
+            p["resolved_at"] = utc_now()
+            touched = True
+    if touched:
+        with proposals_path(root).open("w", encoding="utf-8") as handle:
+            for p in proposals:
+                handle.write(json.dumps(p, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def ratify_proposal(
+    root: Path, proposal_id: str, attested_by: str, decision: str,
+    labels: list[str] | None = None, note: str | None = None,
+) -> dict[str, Any]:
+    """The human act on a drafted proposal — accept / amend / reject.
+
+    accept and amend write a real attestation (carrying both ``proposed_by`` the
+    AI and ``attested_by`` the human); reject leaves the judgment seat empty (no
+    attestation), so abdication stays visible.
+    """
+    decision = (decision or "accept").strip().lower()
+    if decision not in ("accept", "amend", "reject"):
+        raise SystemExit("--decision must be accept, amend, or reject")
+    if not attested_by.strip():
+        raise SystemExit("--attested-by is required — name the human ratifying; do not ratify on their behalf")
+    proposal = latest_pending_proposal(root, proposal_id)
+    if proposal is None:
+        raise SystemExit("no pending proposal to ratify — draft one with `alignment propose`, or pass a valid --proposal-id")
+    pid = str(proposal.get("proposal_id") or "")
+    if decision == "reject":
+        _set_proposal_status(root, pid, "rejected")
+        return {
+            "decision": "reject", "proposal_id": pid, "attested": False,
+            "note": "draft rejected — the judgment seat stays empty until a human stands behind one",
+        }
+    if decision == "amend":
+        use_labels = list(labels) if labels else list(proposal.get("labels") or [])
+        use_note = note if note is not None else str(proposal.get("note") or "")
+    else:
+        use_labels = list(proposal.get("labels") or [])
+        use_note = str(proposal.get("note") or "")
+    record = _write_alignment(
+        root, use_labels, use_note, str(proposal.get("review_file") or ""), attested_by,
+        extra={"proposed_by": proposal.get("drafted_by"), "ratification": decision, "proposal_id": pid},
+    )
+    _set_proposal_status(root, pid, "accepted" if decision == "accept" else "amended")
+    return {"decision": decision, "proposal_id": pid, "attested": True, "record": record}
 
 
 def agent_label(entry: dict[str, Any]) -> str:
@@ -1058,6 +1192,9 @@ def compute_review_due(root: Path, threshold: int) -> dict[str, Any]:
             if (parse_time(event.get("recorded_at")) or epoch) > reference
         ]
     due = len(new_allocations) >= threshold or len(goal_events) > 0
+    # A drafted-but-unratified attestation: the seat has a draft in it but is
+    # still empty (a draft is not an attestation) until a human ratifies.
+    pending_proposal = latest_pending_proposal(root) is not None
     return {
         "due": due,
         "threshold": threshold,
@@ -1065,6 +1202,7 @@ def compute_review_due(root: Path, threshold: int) -> dict[str, Any]:
         # Has anyone ever stood behind this project's work? An empty seat is a
         # finding, not a default — surfaced for any consumer, human or automation.
         "ever_attested": reference is not None,
+        "pending_proposal": pending_proposal,
         "new_allocations": len(new_allocations),
         "new_goal_events": len(goal_events),
         "sessions_touched": len(sessions),
@@ -1426,6 +1564,20 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
                 f"{debt['new_allocations']} allocation(s) across {debt['sessions_touched']} "
                 "session(s) are unattended. An empty judgment seat is itself the finding —"
                 " review and attest, or name who is accountable.",
+            ]
+        )
+    # A drafted-but-unratified attestation: the seat has a draft, but a draft is
+    # not an attestation — it is empty until a human ratifies (accept/amend/reject).
+    pending = latest_pending_proposal(root)
+    if pending is not None:
+        drafted_by = str(pending.get("drafted_by") or "an assistant")
+        lines.extend(
+            [
+                "",
+                f"> **A draft attestation by {drafted_by} awaits your ratification.** "
+                "A draft is not an attestation — the seat is empty until you ratify it "
+                "(`alignment ratify --decision accept|amend|reject --attested-by \"<you>\"`). "
+                "Silence is not assent.",
             ]
         )
     if fleet["owed"] > 0:
@@ -2242,6 +2394,19 @@ def main() -> int:
     alignment_record.add_argument("--review-file", default="")
     alignment_record.add_argument("--attested-by", default="", help="name of the human standing behind this review (defaults to git user.name)")
     alignment_sub.add_parser("list")
+    # Assisted attestation: an AI drafts (propose), a human ratifies.
+    alignment_propose = alignment_sub.add_parser("propose")
+    alignment_propose.add_argument("--label", action="append", required=True, choices=sorted(ALIGNMENT_LABELS))
+    alignment_propose.add_argument("--note", default="")
+    alignment_propose.add_argument("--review-file", default="")
+    alignment_propose.add_argument("--drafted-by", default="", help="who drafted this proposal (e.g. the assistant) — a draft is not an attestation")
+    alignment_ratify = alignment_sub.add_parser("ratify")
+    alignment_ratify.add_argument("--proposal-id", default="", help="which pending proposal (default: the latest)")
+    alignment_ratify.add_argument("--decision", default="accept", choices=["accept", "amend", "reject"])
+    alignment_ratify.add_argument("--label", action="append", default=[], choices=sorted(ALIGNMENT_LABELS), help="override labels when --decision amend")
+    alignment_ratify.add_argument("--note", default=None, help="override note when --decision amend")
+    alignment_ratify.add_argument("--attested-by", default="", help="the human ratifying — do not ratify on their behalf")
+    alignment_sub.add_parser("proposals")
     args = parser.parse_args()
     root = project_root()
     if args.command == "init":
@@ -2307,6 +2472,14 @@ def main() -> int:
             print(json.dumps({"record": record, "output": str(alignment_path(root))}, ensure_ascii=False, indent=2))
         elif args.alignment_command == "list":
             print(json.dumps({"records": list_alignment(root)}, ensure_ascii=False, indent=2))
+        elif args.alignment_command == "propose":
+            proposal = append_proposal(root, args.label, args.note, args.drafted_by, args.review_file)
+            print(json.dumps({"proposal": proposal, "output": str(proposals_path(root))}, ensure_ascii=False, indent=2))
+        elif args.alignment_command == "ratify":
+            result = ratify_proposal(root, args.proposal_id, args.attested_by, args.decision, args.label, args.note)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        elif args.alignment_command == "proposals":
+            print(json.dumps({"proposals": list_proposals(root)}, ensure_ascii=False, indent=2))
         else:
             alignment.print_help()
             return 2

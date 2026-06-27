@@ -224,6 +224,28 @@ honest:
   the seat; the question is always "is anyone accountable," recorded, never
   erased. The floor, walked up the tree: leaf (v0.8 `focus`), worker (v0.9.2
   `agent_id`), now **root**.
+- **v0.9.4 — Assisted attestation: hide the taxonomy, keep the verdict human**
+  *(shipped)*. Dogfooding the loop by hand surfaced the real adoption blocker:
+  for a human, **operating a 7-label taxonomy + composing a reason is too much
+  friction** — and the project's own premise (attention is scarce) means that
+  friction *guarantees* the empty seat. The fix is not to automate the human away
+  (that forges the floor) but to **separate the act from its articulation**: the
+  labels + reasoning are clerical, machine-facing, and can be **drafted by an AI**;
+  the act (a named human standing behind it) stays irreducible but becomes
+  near-zero-effort — **accept / amend / reject** a draft, in plain terms, with the
+  7 labels **never shown to the human** by default. Mechanism: `alignment propose
+  --drafted-by` writes a *draft* (kept in a separate `proposals.jsonl`, it does
+  **not** reset Review Debt or set `ever_attested`); `alignment ratify --decision
+  accept|amend|reject --attested-by` is the human act — accept/amend write a real
+  attestation carrying **both** `proposed_by` (the AI) and `attested_by` (the
+  human), reject leaves the seat empty. StillMirror has **no LLM** and stays that
+  way: the draft is authored by the *AI consumer* (the review skill, the MCP
+  client — two new tools `propose_alignment`/`ratify_alignment`), never by the
+  CLI. This is `propose ≠ authorize` a fourth time, now at the **terminus**.
+  **Named limit:** no tool can force a human to *look* before accepting — v0.9.4
+  makes draft-vs-ratified visible, reject cheap, and silence ≠ assent (a pending
+  draft is an empty seat), but accept-without-looking stays possible. That residue
+  is stated, not engineered away.
 - **v1.0 — Objective provenance-lite for agentic projects.**
 - **Deferred** — research / writing drift review.
 

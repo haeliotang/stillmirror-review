@@ -42,32 +42,67 @@ To check whether a review is even due (e.g. before nudging the user), run
 allocations, new goal events, how many top-level sessions ran, and how many
 distinct subagents (`agents_touched`) ran since the last review.
 
-Present the labels as a rough prompt for the user's review, never as a
-measurement. Do not output drift scores, productivity scores, objective-capture
-diagnoses, or advice about what the user should pursue.
+Do not output drift scores, productivity scores, objective-capture diagnoses, or
+advice about what the user should pursue.
 
-If the user says a label is wrong, record the correction so future reviews honor
-their judgment (the ledger applies corrections by `event_id`):
+## Assisted attestation — you draft, the human ratifies
+
+The seven alignment labels (`necessary_support`, `intentional_pivot`,
+`operational_drift`, `exploration`, `noise`, `misclassification`,
+`insufficient_evidence`) are a **machine vocabulary**. **Do not make the user
+operate them** — for a human, choosing from a taxonomy and composing a reason is
+exactly the friction that makes them abdicate. Instead:
+
+**1. Draft a proposal.** Read the review evidence and map it to labels + a short
+plain-language note, then record it as a *draft* (it is NOT an attestation — the
+judgment seat stays empty until the user ratifies):
+
+```sh
+"${CLAUDE_PLUGIN_ROOT}/bin/stillmirror-review" alignment propose \
+  --label necessary_support --label exploration \
+  --note "<your plain-language read of the period>" \
+  --drafted-by "assistant"
+```
+
+**2. Ask the user in plain terms — never show them the label list.** Give them a
+one-line read and exactly three options:
+
+> "This period looks like *<your one-line plain read>*. Does that look right, is
+> something off, or can't you tell?"
+
+**3. Ratify with their decision** — this is the irreducible human act; only the
+user decides, and you must never ratify on their behalf:
+
+```sh
+# "looks right" →
+"${CLAUDE_PLUGIN_ROOT}/bin/stillmirror-review" alignment ratify \
+  --decision accept --attested-by "<the user's name>"
+
+# "something's off: it was actually …" → re-map their words to labels, then:
+"${CLAUDE_PLUGIN_ROOT}/bin/stillmirror-review" alignment ratify \
+  --decision amend --label operational_drift \
+  --note "<the user's correction, in their words>" --attested-by "<the user's name>"
+
+# "no, that read is wrong / I won't endorse it" →
+"${CLAUDE_PLUGIN_ROOT}/bin/stillmirror-review" alignment ratify \
+  --decision reject --attested-by "<the user's name>"
+```
+
+`accept`/`amend` record a real attestation carrying both `proposed_by` (you) and
+`attested_by` (the user). `reject` leaves the seat empty — abdication stays
+visible; do not retry it as an accept. **Silence is not assent:** if the user
+does not answer, leave the draft pending; never accept on their behalf.
+
+If a *classifier* label on a specific allocation is wrong (not the overall
+judgment), correct that entry instead — an accountable act, named, not fabricated:
 
 ```sh
 "${CLAUDE_PLUGIN_ROOT}/bin/stillmirror-review" correct \
-  --event <event_id> \
-  --label evaluation \
-  --attested-by "<who is accountable for this correction>" \
-  --note "User reclassified this entry."
+  --event <event_id> --label evaluation \
+  --attested-by "<who is accountable>" --note "User reclassified this entry."
 ```
 
-A correction is an accountable act — name who made it (a human, or a named
-review process); do not fabricate the reclassification yourself.
-
-After **the user** chooses an alignment label, write it back. The alignment
-record is a named human attestation — the irreducible human act this tool exists
-to protect. Do not invent the label or the judgment yourself; record only what
-the user decided, and name them as the attester:
-
-```sh
-"${CLAUDE_PLUGIN_ROOT}/bin/stillmirror-review" alignment record \
-  --label necessary_support \
-  --attested-by "<the user's name>" \
-  --note "User confirmed these allocations support the accepted goal."
-```
+A user who prefers to author their own attestation directly can still use
+`alignment record --label … --attested-by "<their name>"` — but default to the
+draft-and-ratify flow above; it is what keeps the human act cheap without forging
+it.

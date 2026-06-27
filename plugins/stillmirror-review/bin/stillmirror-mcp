@@ -30,8 +30,9 @@ TOOLS = [
         "name": "review_due",
         "description": (
             "What needs the user's review in a project: unreviewed allocations, new "
-            "goal events, and how many agent threads ran since the last human-attested "
-            "review. Read-only evidence."
+            "goal events, top-level sessions and distinct subagents since the last "
+            "human-attested review, plus whether a drafted attestation is awaiting the "
+            "user's ratification. Read-only evidence."
         ),
         "inputSchema": {
             "type": "object",
@@ -78,6 +79,51 @@ TOOLS = [
             "required": ["project_path", "labels", "attested_by"],
         },
     },
+    {
+        "name": "propose_alignment",
+        "description": (
+            "DRAFT an alignment attestation for the user to ratify — assistance, NOT the "
+            "judgment. Read the review evidence, propose labels + a plain-language note; "
+            "the draft is recorded but does NOT count as an attestation (the seat stays "
+            "empty until the user ratifies). Then present the user a one-line plain read "
+            "and ask: does this look right, is something off, or can't you tell? — do NOT "
+            "show them the label taxonomy; the labels are your machine-facing draft. Valid "
+            "labels: necessary_support, intentional_pivot, operational_drift, exploration, "
+            "noise, misclassification, insufficient_evidence."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project_path": {"type": "string", "description": "Absolute path to the project repository"},
+                "labels": {"type": "array", "items": {"type": "string"}, "description": "Your drafted labels"},
+                "note": {"type": "string", "description": "Your drafted plain-language reasoning"},
+                "drafted_by": {"type": "string", "description": "Who drafted this (e.g. 'assistant') — a draft is not an attestation"},
+            },
+            "required": ["project_path", "labels", "drafted_by"],
+        },
+    },
+    {
+        "name": "ratify_alignment",
+        "description": (
+            "Record the USER'S ratification of a drafted proposal — accept / amend / "
+            "reject. This is the irreducible human act: only the user decides. accept = "
+            "the user endorses your draft as-is; amend = the user changes labels/note; "
+            "reject = the user won't endorse it and the seat stays empty. Pass the user's "
+            "own decision and name them — never ratify on their behalf."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project_path": {"type": "string", "description": "Absolute path to the project repository"},
+                "decision": {"type": "string", "enum": ["accept", "amend", "reject"], "description": "The user's decision"},
+                "attested_by": {"type": "string", "description": "The user's name — who ratifies"},
+                "labels": {"type": "array", "items": {"type": "string"}, "description": "Override labels (amend only)"},
+                "note": {"type": "string", "description": "Override note (amend only)"},
+                "proposal_id": {"type": "string", "description": "Which pending proposal (default: the latest)"},
+            },
+            "required": ["project_path", "decision", "attested_by"],
+        },
+    },
 ]
 
 
@@ -117,6 +163,34 @@ def call_tool(name: str, args: dict[str, Any]) -> str:
             return "error: attested_by is required — name the human who is accountable; do not attest on their behalf."
         cli_args = ["alignment", "record", "--attested-by", attested_by]
         for label in labels:
+            cli_args += ["--label", str(label)]
+        if args.get("note"):
+            cli_args += ["--note", str(args["note"])]
+        return run_cli(project_path, cli_args)
+    if name == "propose_alignment":
+        labels = args.get("labels") or []
+        drafted_by = (args.get("drafted_by") or "").strip()
+        if not labels:
+            return "error: at least one drafted label is required."
+        if not drafted_by:
+            return "error: drafted_by is required — name who drafted this; a draft is not an attestation."
+        cli_args = ["alignment", "propose", "--drafted-by", drafted_by]
+        for label in labels:
+            cli_args += ["--label", str(label)]
+        if args.get("note"):
+            cli_args += ["--note", str(args["note"])]
+        return run_cli(project_path, cli_args)
+    if name == "ratify_alignment":
+        decision = (args.get("decision") or "").strip()
+        attested_by = (args.get("attested_by") or "").strip()
+        if decision not in ("accept", "amend", "reject"):
+            return "error: decision must be accept, amend, or reject — the user's own choice."
+        if not attested_by:
+            return "error: attested_by is required — name the human ratifying; do not ratify on their behalf."
+        cli_args = ["alignment", "ratify", "--decision", decision, "--attested-by", attested_by]
+        if args.get("proposal_id"):
+            cli_args += ["--proposal-id", str(args["proposal_id"])]
+        for label in (args.get("labels") or []):
             cli_args += ["--label", str(label)]
         if args.get("note"):
             cli_args += ["--note", str(args["note"])]

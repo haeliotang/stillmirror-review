@@ -70,6 +70,16 @@ Functional gates:
 - `alignment record/list` writes user review records, each a named human
   attestation (`attested_by` + `human_attested`), defaulting the attester to git
   `user.name`.
+- assisted attestation: `alignment propose --drafted-by` writes a **draft** to a
+  separate `alignment/proposals.jsonl` that is **not** an attestation — it does
+  not reset Review Debt or set `ever_attested`, and `review-due.pending_proposal`
+  + the review surface it as an empty seat with a draft awaiting ratification.
+  `alignment ratify --decision accept|amend|reject --attested-by` is the human
+  act: accept/amend write a real attestation carrying both `proposed_by` (AI) and
+  `attested_by` (human) and reset the debt; reject leaves the seat empty. `ratify`
+  refuses without a named human, and a draft refuses without `--drafted-by`.
+- the MCP adapter exposes `propose_alignment` and `ratify_alignment` alongside
+  `record_alignment`; `ratify_alignment` refuses to ratify without a named human.
 - `maintainer-review` (the wedge) classifies commits git-only into a maintainer
   profile mapped to canonical classes, and writes a report, a neutral-color
   shields badge JSON, and a sidecar with `maintainer_counts` and
