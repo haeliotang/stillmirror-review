@@ -617,6 +617,78 @@ class StillMirrorPluginTests(unittest.TestCase):
             self.assertEqual(status["sessions_touched"], 1)  # one top-level session
             self.assertEqual(status["agents_touched"], 2)    # two distinct subagents
 
+    def _problem_doc(self, project: Path) -> dict:
+        return json.loads((project / ".stillmirror" / "problems" / "mainline-hypothesis.json").read_text())
+
+    def _goals(self, project: Path) -> list:
+        return json.loads((project / ".stillmirror" / "goals" / "accepted-goals.json").read_text())["goals"]
+
+    def test_problem_and_goals_default_to_human_accountable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.run_script(project, "problem", "set", "Ship a trustworthy review layer")
+            self.run_script(project, "goals", "add", "hook reliability")
+            blocks = [self._problem_doc(project)["accountability"], self._goals(project)[0]["accountability"]]
+            for block in blocks:
+                self.assertEqual(block["tier"], "human")
+                self.assertTrue(block["accountable"])
+                self.assertTrue(block["set_by"])  # named, defaulting to git user.name
+            self.assertEqual(self._goals(project)[0]["review_state"], "accepted")
+
+    def test_autonomous_problem_surfaces_root_empty_seat(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.run_script(project, "problem", "set", "AI-chosen purpose", "--tier", "autonomous")
+            self.assertFalse(self._problem_doc(project)["accountability"]["accountable"])
+            self.run_script(project, "review", "--since", "30d")
+            text = next((project / ".stillmirror" / "reviews").glob("*-project-alignment-review.md")).read_text()
+            self.assertIn("root problem has no accountable party", text)
+            self.assertIn("(autonomous)", text)
+            self.assertIs(self.load_ledger(project)["coverage"]["root_accountable"], False)
+
+    def test_agent_tier_requires_named_principal(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            # An AI "under a principal" with no principal named is refused.
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.run_script(project, "goals", "add", "x", "--tier", "agent")
+            # With a named principal it succeeds and is accountable to them.
+            self.run_script(project, "goals", "add", "x", "--tier", "agent", "--attested-by", "Hao")
+            block = self._goals(project)[0]["accountability"]
+            self.assertEqual(block["tier"], "agent")
+            self.assertEqual(block["set_by"], "Hao")
+            self.assertTrue(block["accountable"])
+
+    def test_autonomous_goal_is_proposed_then_accept_promotes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.run_script(project, "goals", "add", "harden hooks", "--tier", "autonomous")
+            g = self._goals(project)[0]
+            self.assertEqual(g["review_state"], "proposed")  # an agent can propose, not accept
+            self.assertFalse(g["accountability"]["accountable"])
+            events = json.loads(self.run_script(project, "goals", "events").stdout)["events"]
+            self.assertTrue(any(e["type"] == "goal_proposed" for e in events))
+            # An autonomous tier cannot accept (argparse forbids the tier).
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.run_script(project, "goals", "accept", "harden hooks", "--tier", "autonomous")
+            # A named party promotes it — the accountable authorization act.
+            self.run_script(project, "goals", "accept", "harden hooks", "--attested-by", "Hao")
+            g2 = self._goals(project)[0]
+            self.assertEqual(g2["review_state"], "accepted")
+            self.assertEqual(g2["accountability"]["set_by"], "Hao")
+            events2 = json.loads(self.run_script(project, "goals", "events").stdout)["events"]
+            self.assertTrue(any(e["type"] == "goal_accepted" for e in events2))
+
+    def test_legacy_records_produce_no_root_empty_seat(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.run_script(project, "init")  # no problem set → no accountability block
+            self.run_script(project, "review", "--since", "30d")
+            text = next((project / ".stillmirror" / "reviews").glob("*-project-alignment-review.md")).read_text()
+            self.assertNotIn("no accountable party", text)  # silence is unmarked, not an empty seat
+            self.assertIn("pre-0.9.3", text)
+            self.assertIsNone(self.load_ledger(project)["coverage"]["root_accountable"])
+
     def test_maintainer_review_pr_issues_degrades_gracefully(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             project = Path(temp)

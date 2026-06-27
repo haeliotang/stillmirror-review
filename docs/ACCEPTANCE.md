@@ -25,6 +25,19 @@ Functional gates:
   `replace` append `goal_introduced`/`goal_retired`/`goal_replaced` events to
   `goals/goal-events.jsonl`.
 - `problem set` writes `problems/mainline-hypothesis.json`.
+- `problem set` and `goals add/replace` stamp an `accountability` block
+  (`set_by` + `tier` + `accountable`) via `--attested-by` + `--tier
+  {human,agent,autonomous}`, defaulting to `human` (git `user.name`) so existing
+  use is unchanged. `--tier agent` requires a named principal; `--tier
+  autonomous` is `accountable: false`.
+- an `autonomous` `problem set` makes `review` surface a **root empty-seat
+  finding** ("the project's root problem has no accountable party") and sets
+  `coverage.root_accountable: false`; a pre-0.9.3 record with no block produces
+  **no** finding (`root_accountable: null` — unmarked, not an empty seat).
+- an `autonomous` `goals add` lands as `review_state: "proposed"` (logged as
+  `goal_proposed`), is excluded from `core_problem` matching until accepted, and
+  `goals accept <ref> --attested-by` promotes it to `accepted` (logged as
+  `goal_accepted`); `accept` refuses an `autonomous` tier.
 - `focus "<goal>"` declares current intent; events in the focus window get
   ground-truth linkage (`supports_mainline: "declared"`, `core_problem`,
   `receipt.reason: "declared"`) overriding the keyword guess, and `focus --clear`

@@ -455,9 +455,22 @@ def load_accepted_goals(root: Path) -> dict[str, Any]:
     return doc
 
 
-def add_goal(root: Path, statement: str, source: str, scope: str, review_state: str) -> dict[str, Any]:
+def add_goal(
+    root: Path,
+    statement: str,
+    source: str,
+    scope: str,
+    review_state: str,
+    attested_by: str = "",
+    tier: str = "human",
+) -> dict[str, Any]:
     if not statement.strip():
         raise SystemExit("goal statement cannot be empty")
+    accountability = accountability_of(root, attested_by, tier)
+    # An autonomous agent can *propose* a goal but cannot *accept* (authorize) it
+    # — acceptance is the accountable act. It lands as proposed until promoted.
+    if not accountability["accountable"]:
+        review_state = "proposed"
     doc = load_accepted_goals(root)
     goal_id = f"goal-{slug(statement)}-{short_hash(statement)}"
     existing = [goal for goal in doc["goals"] if goal.get("id") == goal_id]
@@ -468,6 +481,7 @@ def add_goal(root: Path, statement: str, source: str, scope: str, review_state: 
         "source": source,
         "scope": scope,
         "review_state": review_state,
+        "accountability": accountability,
         "created_at": now,
         "updated_at": now,
         "superseded": False,
@@ -481,7 +495,8 @@ def add_goal(root: Path, statement: str, source: str, scope: str, review_state: 
     else:
         doc["goals"].append(record)
         saved = record
-        append_goal_event(root, "goal_introduced", goal_id, saved["statement"], source=source)
+        event_type = "goal_proposed" if review_state == "proposed" else "goal_introduced"
+        append_goal_event(root, event_type, goal_id, saved["statement"], source=source)
     write_json(accepted_goals_path(root), doc)
     return saved
 
@@ -506,9 +521,14 @@ def replace_goal(
     scope: str,
     review_state: str,
     note: str = "",
+    attested_by: str = "",
+    tier: str = "human",
 ) -> dict[str, Any]:
     if not new_statement.strip():
         raise SystemExit("replacement goal statement cannot be empty")
+    accountability = accountability_of(root, attested_by, tier)
+    if not accountability["accountable"]:
+        review_state = "proposed"
     doc = load_accepted_goals(root)
     old = resolve_goal(doc, ref)
     if old is None:
@@ -522,6 +542,7 @@ def replace_goal(
         "source": source,
         "scope": scope,
         "review_state": review_state,
+        "accountability": accountability,
         "created_at": now,
         "updated_at": now,
         "superseded": False,
@@ -542,7 +563,43 @@ def replace_goal(
     return {"old": old, "new": saved_new}
 
 
-def set_problem(root: Path, statement: str, confidence: float, alternatives: list[str]) -> dict[str, Any]:
+def accept_goal(root: Path, ref: str, attested_by: str = "", tier: str = "human", note: str = "") -> dict[str, Any]:
+    """Promote a proposed goal to accepted — the accountable authorization act.
+
+    A proposed goal (e.g. one an autonomous agent suggested) is not yet a goal the
+    project authorized. Acceptance names who is accountable for that authorization;
+    an autonomous tier cannot accept — that would be the empty seat accepting
+    itself.
+    """
+    accountability = accountability_of(root, attested_by, tier)
+    if not accountability["accountable"]:
+        raise SystemExit(
+            "an autonomous agent cannot accept a goal — acceptance is the "
+            "accountable act; name a principal with --attested-by"
+        )
+    doc = load_accepted_goals(root)
+    goal = resolve_goal(doc, ref)
+    if goal is None:
+        raise SystemExit(f"no unique goal matched: {ref!r}")
+    goal["review_state"] = "accepted"
+    goal["accountability"] = accountability
+    goal["updated_at"] = utc_now()
+    write_json(accepted_goals_path(root), doc)
+    append_goal_event(
+        root, "goal_accepted", str(goal.get("id") or ""), str(goal.get("statement") or ""),
+        source=accountability["tier"], note=note,
+    )
+    return goal
+
+
+def set_problem(
+    root: Path,
+    statement: str,
+    confidence: float,
+    alternatives: list[str],
+    attested_by: str = "",
+    tier: str = "human",
+) -> dict[str, Any]:
     init_project(root, quiet=True)
     path = sm_dir(root) / "problems" / "mainline-hypothesis.json"
     doc = load_json(path, {})
@@ -555,6 +612,8 @@ def set_problem(root: Path, statement: str, confidence: float, alternatives: lis
             "confidence": max(0.0, min(1.0, confidence)),
             "alternatives": alternatives or [],
             "review_state": "reviewed",
+            # Who set the project's root purpose, and is anyone accountable for it.
+            "accountability": accountability_of(root, attested_by, tier),
             "updated_at": utc_now(),
         }
     )
@@ -609,6 +668,45 @@ def default_attester(root: Path) -> str:
     except Exception:
         pass
     return os.environ.get("USER") or os.environ.get("USERNAME") or "unknown"
+
+
+ACCOUNTABILITY_TIERS = ("human", "agent", "autonomous")
+
+
+def accountability_of(root: Path, attested_by: str, tier: str) -> dict[str, Any]:
+    """Who is accountable for an intent-provenance act (the problem, a goal).
+
+    Not a human/AI toggle — a *named setter plus a tier*, so an unaccountable
+    setting is a visible status, never an equivalent silent default:
+
+    - ``human``      — a named human is accountable (default; git user.name).
+    - ``agent``      — an AI under a named accountable *principal* (required:
+      the principal who delegated, who stays accountable).
+    - ``autonomous`` — an AI with no accountable principal: an empty seat at the
+      root, surfaced as a finding, never filled on its behalf.
+    """
+    tier = (tier or "human").strip().lower()
+    if tier not in ACCOUNTABILITY_TIERS:
+        raise SystemExit(f"unknown accountability tier: {tier!r} (choose human/agent/autonomous)")
+    name = attested_by.strip()
+    if tier == "human":
+        return {"set_by": name or default_attester(root), "tier": "human", "accountable": True}
+    if tier == "agent":
+        if not name:
+            raise SystemExit("--tier agent requires --attested-by naming the accountable principal")
+        return {"set_by": name, "tier": "agent", "accountable": True}
+    return {"set_by": name or "(autonomous agent)", "tier": "autonomous", "accountable": False}
+
+
+def accountability_label(block: Any) -> str:
+    """'<set_by> (<tier>)' for a stamped block, or a legacy note when unmarked.
+
+    A record with no block predates v0.9.3 — it is *unmarked*, not unaccountable;
+    do not mistake silence for an empty seat.
+    """
+    if not isinstance(block, dict) or not block.get("tier"):
+        return "(no accountability recorded — pre-0.9.3)"
+    return f"{block.get('set_by') or 'unknown'} ({block.get('tier')})"
 
 
 def record_alignment(root: Path, labels: list[str], note: str, review_file: str, attested_by: str = "") -> dict[str, Any]:
@@ -1084,9 +1182,17 @@ def build_ledger(root: Path, since_value: str, base: str | None = None) -> dict[
     else:
         since = parse_since(since_value)
     goals_doc = load_json(sm_dir(root) / "goals" / "accepted-goals.json", {"goals": []})
+    # Is anyone accountable for the project's root purpose? True / False (empty
+    # seat at the root) / None (legacy-unmarked, pre-0.9.3 — not an empty seat).
+    hypothesis_doc = load_json(sm_dir(root) / "problems" / "mainline-hypothesis.json", {})
+    root_acc_block = hypothesis_doc.get("accountability") if isinstance(hypothesis_doc, dict) else None
+    root_accountable = root_acc_block.get("accountable") if isinstance(root_acc_block, dict) else None
     accepted_goals = goals_doc.get("goals") if isinstance(goals_doc, dict) else []
     if not isinstance(accepted_goals, list):
         accepted_goals = []
+    # A *proposed* goal is not yet authorized, so it must not be matched as the
+    # mainline or reinforce core_problem until an accountable party accepts it.
+    accepted_goals = [goal for goal in accepted_goals if goal.get("review_state") != "proposed"]
     corrections = load_corrections(root)
     focus_records = list_focus(root)
     events = load_trace_events(root, since)
@@ -1203,6 +1309,7 @@ def build_ledger(root: Path, since_value: str, base: str | None = None) -> dict[
         "declared_entries": declared_entries,
         "inferred_entries": inferred_entries,
         "agents_observed": agents_observed,
+        "root_accountable": root_accountable,
         "not_captured": [
             "Decisions or reasoning that happened only in chat, not as tool calls.",
             "Work done outside Claude Code or outside this repository.",
@@ -1358,19 +1465,43 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
             f"- Statement: {hypothesis.get('statement') or '(unreviewed)'}",
             f"- Confidence: {hypothesis.get('confidence', 0)}",
             f"- Alternatives: {', '.join(hypothesis.get('alternatives') or []) or '(none recorded)'}",
-            "",
-            "## Goal Provenance",
-            "",
+            f"- Set by: {accountability_label(hypothesis.get('accountability') if isinstance(hypothesis, dict) else None)}",
         ]
     )
+    root_acc = hypothesis.get("accountability") if isinstance(hypothesis, dict) else None
+    if isinstance(root_acc, dict) and root_acc.get("accountable") is False:
+        lines.extend(
+            [
+                "",
+                "> **The project's root problem has no accountable party.** An AI set the "
+                "project's purpose and no one stands behind it — every downstream goal and "
+                "allocation is judged against an unowned root. Name an accountable principal "
+                "(`problem set … --attested-by`), or treat this as abdication at the root, "
+                "not a default.",
+            ]
+        )
+    lines.extend(["", "## Goal Provenance", ""])
     if accepted:
         for goal in accepted:
-            state = "retired" if goal.get("retired") else ("superseded" if goal.get("superseded") else "active")
+            if goal.get("retired"):
+                state = "retired"
+            elif goal.get("superseded"):
+                state = "superseded"
+            elif goal.get("review_state") == "proposed":
+                state = "proposed"
+            else:
+                state = "active"
             hits = reinforcement.get(str(goal.get("id") or ""), 0)
-            lines.append(
+            acct_block = goal.get("accountability")
+            line = (
                 f"- {goal.get('statement') or goal.get('goal')} "
-                f"— {state}, reinforced by {hits} allocation(s)"
+                f"— {state}, reinforced by {hits} allocation(s); set by {accountability_label(acct_block)}"
             )
+            if state == "proposed":
+                line += "  ← proposed, not yet accepted by an accountable party"
+            elif isinstance(acct_block, dict) and acct_block.get("accountable") is False:
+                line += "  ← accepted with no accountable party"
+            lines.append(line)
     else:
         lines.extend(
             [
@@ -2063,11 +2194,14 @@ def main() -> int:
     focus.add_argument("--list", action="store_true", dest="list_focus")
     goals = sub.add_parser("goals")
     goals_sub = goals.add_subparsers(dest="goals_command")
+    tier_help = "who is accountable for this intent (default human)"
     goals_add = goals_sub.add_parser("add")
     goals_add.add_argument("statement")
     goals_add.add_argument("--source", default="user")
     goals_add.add_argument("--scope", default="project")
     goals_add.add_argument("--review-state", default="accepted", choices=["reviewed", "accepted"])
+    goals_add.add_argument("--attested-by", default="", help="name of the accountable party (human or principal); defaults to git user.name")
+    goals_add.add_argument("--tier", default="human", choices=list(ACCOUNTABILITY_TIERS), help=tier_help)
     goals_sub.add_parser("list")
     goals_sub.add_parser("events")
     goals_retire = goals_sub.add_parser("retire")
@@ -2080,12 +2214,21 @@ def main() -> int:
     goals_replace.add_argument("--scope", default="project")
     goals_replace.add_argument("--review-state", default="accepted", choices=["reviewed", "accepted"])
     goals_replace.add_argument("--note", default="")
+    goals_replace.add_argument("--attested-by", default="", help="name of the accountable party; defaults to git user.name")
+    goals_replace.add_argument("--tier", default="human", choices=list(ACCOUNTABILITY_TIERS), help=tier_help)
+    goals_accept = goals_sub.add_parser("accept")
+    goals_accept.add_argument("goal")
+    goals_accept.add_argument("--attested-by", default="", help="name of the party accountable for accepting this goal; defaults to git user.name")
+    goals_accept.add_argument("--tier", default="human", choices=["human", "agent"], help="who accepts (autonomous cannot accept)")
+    goals_accept.add_argument("--note", default="")
     problem = sub.add_parser("problem")
     problem_sub = problem.add_subparsers(dest="problem_command")
     problem_set = problem_sub.add_parser("set")
     problem_set.add_argument("statement")
     problem_set.add_argument("--confidence", type=float, default=0.5)
     problem_set.add_argument("--alternative", action="append", default=[], dest="alternatives")
+    problem_set.add_argument("--attested-by", default="", help="name of the accountable party for the project's root purpose; defaults to git user.name")
+    problem_set.add_argument("--tier", default="human", choices=list(ACCOUNTABILITY_TIERS), help=tier_help)
     correct = sub.add_parser("correct")
     correct.add_argument("--event", required=True)
     correct.add_argument("--label", action="append", required=True, choices=list(RUBRIC.keys()))
@@ -2130,7 +2273,7 @@ def main() -> int:
             print(json.dumps({"focus": record, "output": str(focus_path(root))}, ensure_ascii=False, indent=2))
     elif args.command == "goals":
         if args.goals_command == "add":
-            goal = add_goal(root, args.statement, args.source, args.scope, args.review_state)
+            goal = add_goal(root, args.statement, args.source, args.scope, args.review_state, args.attested_by, args.tier)
             print(json.dumps({"goal": goal, "output": str(accepted_goals_path(root))}, ensure_ascii=False, indent=2))
         elif args.goals_command == "list":
             print(json.dumps(list_goals(root), ensure_ascii=False, indent=2))
@@ -2140,14 +2283,17 @@ def main() -> int:
             goal = retire_goal(root, args.goal, args.note)
             print(json.dumps({"retired": goal, "output": str(goal_events_path(root))}, ensure_ascii=False, indent=2))
         elif args.goals_command == "replace":
-            result = replace_goal(root, args.goal, args.new_statement, args.source, args.scope, args.review_state, args.note)
+            result = replace_goal(root, args.goal, args.new_statement, args.source, args.scope, args.review_state, args.note, args.attested_by, args.tier)
             print(json.dumps({"replaced": result, "output": str(goal_events_path(root))}, ensure_ascii=False, indent=2))
+        elif args.goals_command == "accept":
+            goal = accept_goal(root, args.goal, args.attested_by, args.tier, args.note)
+            print(json.dumps({"accepted": goal, "output": str(accepted_goals_path(root))}, ensure_ascii=False, indent=2))
         else:
             goals.print_help()
             return 2
     elif args.command == "problem":
         if args.problem_command == "set":
-            doc = set_problem(root, args.statement, args.confidence, args.alternatives)
+            doc = set_problem(root, args.statement, args.confidence, args.alternatives, args.attested_by, args.tier)
             print(json.dumps({"problem": doc, "output": str(sm_dir(root) / "problems" / "mainline-hypothesis.json")}, ensure_ascii=False, indent=2))
         else:
             problem.print_help()

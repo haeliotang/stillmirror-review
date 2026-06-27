@@ -203,6 +203,27 @@ honest:
   **Non-goal:** inferring agent identity where the hook gives none — declare it or
   name the blind spot, never guess. This is the same discipline that caught the
   TaskCreated regression, applied to our own overclaim.
+- **v0.9.3 — Provenance accountability: extend the floor to the root**
+  *(shipped)*. The opening question: in the multi-agent era the *generative*
+  setting of intent (`goals add`, eventually `problem set`) will be done by AI
+  too. The accountability floor must not be removed at the root — but the answer
+  is **not** a human/AI toggle that treats the two as equivalent (that erases the
+  seam the tool exists to keep, and builds the "AI sets the goal → AI works → AI
+  reviews → all green" ramp). Instead, lift the primitive the project already
+  invented twice — the `--attested-by` attester (v0.9.1) and the wedge's
+  bot/attested/human tiers — **up the authorization tree to its root**: `problem
+  set` and `goals add/replace` now stamp a **named setter + accountability tier**
+  (`human` / `agent`-under-a-named-principal / `autonomous`). An `autonomous`
+  setting is **never an equivalent silent value**: it is `accountable: false`,
+  and the review surfaces a **root empty-seat finding** (analogous to v0.9's empty
+  judgment seat) — *the project's purpose has no one behind it*. Goals gain
+  **propose ≠ authorize**: an autonomous `goals add` lands as `proposed` (excluded
+  from `core_problem` matching), and `goals accept --attested-by` is the
+  accountable promotion. **Backward compatible:** a pre-0.9.3 record with no block
+  is *unmarked*, not an empty seat. **Boundary:** not a toggle; never auto-fills
+  the seat; the question is always "is anyone accountable," recorded, never
+  erased. The floor, walked up the tree: leaf (v0.8 `focus`), worker (v0.9.2
+  `agent_id`), now **root**.
 - **v1.0 — Objective provenance-lite for agentic projects.**
 - **Deferred** — research / writing drift review.
 

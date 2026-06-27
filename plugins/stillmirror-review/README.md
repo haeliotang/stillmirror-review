@@ -45,8 +45,10 @@ You can also run the bundled scripts directly:
 
 ```sh
 plugins/stillmirror-review/bin/stillmirror-review init
-plugins/stillmirror-review/bin/stillmirror-review problem set "Validate StillMirror as a review layer"
+plugins/stillmirror-review/bin/stillmirror-review problem set "Validate StillMirror as a review layer"   # --attested-by / --tier (default human)
 plugins/stillmirror-review/bin/stillmirror-review goals add "Maintain hook reliability"
+plugins/stillmirror-review/bin/stillmirror-review goals add "Harden the wedge" --tier autonomous   # an AI proposes → "proposed"
+plugins/stillmirror-review/bin/stillmirror-review goals accept "Harden the wedge" --attested-by "Your Name"   # accountable promotion
 plugins/stillmirror-review/bin/stillmirror-review focus "Maintain hook reliability"   # declare current intent (ground-truth linkage)
 plugins/stillmirror-review/bin/stillmirror-review focus --clear
 plugins/stillmirror-review/bin/stillmirror-review goals replace "Maintain hook reliability" --with "Ship a trustworthy review layer"

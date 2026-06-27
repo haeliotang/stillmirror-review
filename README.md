@@ -28,11 +28,16 @@ Alignment is user review, not a system verdict.
 
 One loop, one story — **what you meant ⋈ what happened ⋈ who stood behind it**:
 
-- **Provenance of intent** — `problem set`, `goals add/retire/replace/events`,
-  and **`focus`**: what you accepted as the goal, how it changed, and **what
-  you're working on right now**. `focus` declares intent so allocation is
+- **Provenance of intent** — `problem set`, `goals add/retire/replace/accept/
+  events`, and **`focus`**: what you accepted as the goal, how it changed, and
+  **what you're working on right now**. `focus` declares intent so allocation is
   ground-truth, not a keyword guess — and in a multi-agent run, an agent can
-  declare its own focus.
+  declare its own focus. Every intent-setting act carries an **accountability
+  tier** (`--attested-by` + `--tier human|agent|autonomous`): who is accountable
+  for the goal, recorded — never a human/AI toggle. An AI may *propose* a goal
+  (`--tier autonomous` → `proposed`, promoted by `goals accept --attested-by`),
+  but an **unowned root problem is surfaced as a finding**, not silently
+  accepted.
 - **Evidence of allocation** — hook capture → `ledger` → `review`: where agent
   work actually went, each entry carrying a receipt and honest coverage/blind
   spots.
@@ -70,7 +75,7 @@ claude plugin details stillmirror-review
 Expected shape:
 
 ```text
-stillmirror-review 0.9.2
+stillmirror-review 0.9.3
   The review layer for agentic work. Joins accepted-goal provenance with
   allocation evidence for user alignment review.
   Source: stillmirror-review@stillmirror
@@ -131,8 +136,10 @@ You can also run the bundled helper directly:
 
 ```sh
 plugins/stillmirror-review/bin/stillmirror-review init
-plugins/stillmirror-review/bin/stillmirror-review problem set "Validate StillMirror as a review layer"
+plugins/stillmirror-review/bin/stillmirror-review problem set "Validate StillMirror as a review layer"   # --attested-by "You" --tier human (default)
 plugins/stillmirror-review/bin/stillmirror-review goals add "Maintain hook reliability"
+plugins/stillmirror-review/bin/stillmirror-review goals add "Harden the wedge" --tier autonomous   # an AI proposes → lands as "proposed"
+plugins/stillmirror-review/bin/stillmirror-review goals accept "Harden the wedge" --attested-by "Your Name"   # the accountable promotion
 plugins/stillmirror-review/bin/stillmirror-review focus "Maintain hook reliability"   # declare current intent
 plugins/stillmirror-review/bin/stillmirror-review focus --clear
 plugins/stillmirror-review/bin/stillmirror-review goals replace "Maintain hook reliability" --with "Ship a trustworthy review layer"
