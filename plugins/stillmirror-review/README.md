@@ -60,6 +60,7 @@ plugins/stillmirror-review/bin/stillmirror-review review-due
 plugins/stillmirror-review/bin/stillmirror-review review --since 30d
 plugins/stillmirror-review/bin/stillmirror-review review --base origin/main
 plugins/stillmirror-review/bin/stillmirror-review maintainer-review --since 90d
+plugins/stillmirror-review/bin/stillmirror-review fleet ~/code/proj-a ~/code/proj-b   # cross-project: where is attention owed
 plugins/stillmirror-review/bin/stillmirror-review alignment record --label necessary_support --attested-by "Your Name"
 plugins/stillmirror-review/bin/stillmirror-review alignment propose --label necessary_support --note "draft read" --drafted-by "assistant"   # an AI drafts
 plugins/stillmirror-review/bin/stillmirror-review alignment ratify --decision accept --attested-by "Your Name"   # the human ratifies (accept/amend/reject)

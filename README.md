@@ -54,6 +54,11 @@ One loop, one story — **what you meant ⋈ what happened ⋈ who stood behind 
   `agent_id`) when many agents run — a session is not an agent.
 - **Wedge** — `maintainer-review` (+ the GitHub Action): the same lens on a
   public repo, as a committable badge.
+- **Fleet** — `fleet <path>…`: one overseer, many projects. Across your whole
+  fleet, where is your attention owed — which projects have an **empty seat** and
+  how stale each is. **Producer-agnostic**: reads capture state where present,
+  else git-only, so a project built outside Claude Code still appears. See
+  [docs/FLEET.md](docs/FLEET.md).
 - **Surfaces** — Claude Code (this plugin) and Claude Desktop (the
   [MCP adapter](docs/MCP-ADAPTER.md)).
 
@@ -79,7 +84,7 @@ claude plugin details stillmirror-review
 Expected shape:
 
 ```text
-stillmirror-review 0.9.4
+stillmirror-review 0.9.5
   The review layer for agentic work. Joins accepted-goal provenance with
   allocation evidence for user alignment review.
   Source: stillmirror-review@stillmirror
@@ -157,6 +162,7 @@ plugins/stillmirror-review/bin/stillmirror-review review --base origin/main
 plugins/stillmirror-review/bin/stillmirror-review maintainer-review --since 90d
 plugins/stillmirror-review/bin/stillmirror-review maintainer-review --with-pr-issues
 plugins/stillmirror-review/bin/stillmirror-review aggregate path/to/sidecars/ --out-dir agg
+plugins/stillmirror-review/bin/stillmirror-review fleet ~/code/stillmirror-review ~/code/wutai   # across-projects: where is attention owed
 plugins/stillmirror-review/bin/stillmirror-review alignment record --label necessary_support --attested-by "Your Name"
 ```
 

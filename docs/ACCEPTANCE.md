@@ -99,6 +99,13 @@ Functional gates:
   backlog) and degrades gracefully to git-only when `gh` is unavailable.
 - `aggregate` produces an anonymized cross-repo report that names no project or
   contributor.
+- `fleet <path>…` produces a producer-agnostic cross-project view that unifies on
+  the **empty seat** (is anyone accountable for recent work, and how stale),
+  reading capture state where present and falling back to **git-only** otherwise
+  (so a project built outside Claude Code still appears); it sorts empty seats
+  first, names the user's own projects (local only), and is navigation — no
+  scores, no ranking, no cross-project totals. `--json` carries per-project
+  `source`, `accountable`, `staleness_days`, `owed`, and `pending_proposal`.
 - redacted sample contains no private paths, raw prompts, or transcript payloads.
 
 Boundary:

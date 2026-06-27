@@ -246,6 +246,26 @@ honest:
   makes draft-vs-ratified visible, reject cheap, and silence ≠ assent (a pending
   draft is an empty seat), but accept-without-looking stays possible. That residue
   is stated, not engineered away.
+- **v0.9.5 — Fleet view: where your attention is owed, across producers**
+  *(shipped)*. A challenge reframed the validation target: the future is **one
+  human, many projects, countless agents**, so "one external reviewer per project"
+  is the wrong test — the unit is **one accountable overseer across a fleet**, and
+  the binding question is *"across all my projects, where is my attention owed
+  now?"* StillMirror was per-project; `fleet <path>…` reads many at once. The
+  design key: the members carry **different-resolution evidence** (capture is
+  tool-call level, the wedge is commit level), so it does **not** unify on a debt
+  count — it unifies on the one **universal** signal every project can answer
+  regardless of producer: **is anyone accountable for the recent work, and how
+  stale is that.** Empty seats sort first; navigation, never a ranking (no scores,
+  no best/worst). **Producer-agnostic by necessity and by point:** the validation
+  fleet is `stillmirror-review` (built in Claude Code → capture spine) and `wutai`
+  (built in **OpenAI Codex** → no hooks, read **git-only** via the wedge) — proving
+  StillMirror reviews agentic work from *any* producer, not just Claude Code. This
+  is the wedge's whole reason, realized at fleet scale. **Honest limit:** N=2, both
+  attested by Hao — so it validates the **mechanism + the producer-agnostic
+  claim**, not external-person validity nor the at-scale thesis (that needs N in
+  the tens). It is also the first build that is **its own validation**: the one
+  thing one overseer can test alone, on a real two-project fleet.
 - **v1.0 — Objective provenance-lite for agentic projects.**
 - **Deferred** — research / writing drift review.
 

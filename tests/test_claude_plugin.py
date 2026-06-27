@@ -754,6 +754,40 @@ class StillMirrorPluginTests(unittest.TestCase):
             self.assertFalse(status["pending_proposal"])   # the proposal is resolved (rejected)
             self.assertEqual(self._proposals(project)[0]["status"], "rejected")
 
+    def test_fleet_unifies_on_empty_seat_across_producers(self) -> None:
+        with tempfile.TemporaryDirectory() as ta, tempfile.TemporaryDirectory() as tb:
+            a, b = Path(ta), Path(tb)
+            # A: a Claude Code project (capture spine) with a human attestation.
+            self.capture(a, self.edit_payload(a))
+            self.run_script(a, "ledger", "--since", "30d")
+            self.run_script(a, "alignment", "record", "--label", "necessary_support", "--attested-by", "Hao")
+            # B: a project built elsewhere — a git repo, no .stillmirror (simulates Codex).
+            def git(*args: str) -> None:
+                subprocess.run(["git", "-C", str(b), *args], check=True, capture_output=True, text=True)
+            git("init"); git("config", "user.email", "t@t.co"); git("config", "user.name", "Hao")
+            (b / "f.txt").write_text("x")
+            git("add", "-A"); git("commit", "-m", "feat: thing")
+            fleet = {s["project"]: s for s in json.loads(self.run_script(a, "fleet", str(a), str(b), "--json").stdout)["fleet"]}
+            # B reads git-only, empty seat, owed = its commits.
+            self.assertEqual(fleet[b.name]["source"], "git-only")
+            self.assertFalse(fleet[b.name]["accountable"])
+            self.assertGreaterEqual(fleet[b.name]["owed"], 1)
+            # A reads capture, accountable, named.
+            self.assertEqual(fleet[a.name]["source"], "capture")
+            self.assertTrue(fleet[a.name]["accountable"])
+            self.assertEqual(fleet[a.name]["attested_by"], "Hao")
+            # Human-readable: the empty seat is flagged and sorts first.
+            text = self.run_script(a, "fleet", str(a), str(b)).stdout
+            self.assertIn("EMPTY SEAT", text)
+            self.assertLess(text.index(b.name), text.index(a.name))
+
+    def test_fleet_handles_non_stillmirror_path(self) -> None:
+        with tempfile.TemporaryDirectory() as t:
+            p = Path(t)  # neither capture state nor a git repo
+            out = json.loads(self.run_script(p, "fleet", str(p), "--json").stdout)["fleet"]
+            self.assertEqual(out[0]["source"], "none")
+            self.assertIn("not yet under StillMirror", self.run_script(p, "fleet", str(p)).stdout)
+
     def test_maintainer_review_pr_issues_degrades_gracefully(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             project = Path(temp)
@@ -818,7 +852,7 @@ class StillMirrorPluginTests(unittest.TestCase):
             )
             self.assertEqual(responses[1]["result"]["serverInfo"]["name"], "stillmirror-review")
             tool_names = {t["name"] for t in responses[2]["result"]["tools"]}
-            self.assertEqual(tool_names, {"review_due", "review", "record_alignment", "propose_alignment", "ratify_alignment"})
+            self.assertEqual(tool_names, {"review_due", "review", "record_alignment", "propose_alignment", "ratify_alignment", "fleet"})
             self.assertIn('"due"', responses[3]["result"]["content"][0]["text"])  # evidence, read-only
             self.assertIn("Hao", responses[4]["result"]["content"][0]["text"])  # named human attestation recorded
             # The assistant cannot attest on the human's behalf: a missing attester is refused.

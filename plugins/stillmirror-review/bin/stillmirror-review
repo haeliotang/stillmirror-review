@@ -2318,6 +2318,122 @@ def aggregate_reviews(paths: list[str], out_dir: str = "") -> dict[str, Any]:
     }
 
 
+# --- Fleet view (v0.9.5): one overseer, many projects, any producer ----------
+# Unify NOT on a debt count (capture is tool-call level, the wedge is commit
+# level — different resolutions) but on the one universal signal every project
+# can answer: is anyone accountable for the recent work, and how stale is that.
+
+def _is_git_repo(path: Path) -> bool:
+    try:
+        return subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--is-inside-work-tree"],
+            capture_output=True, text=True, timeout=10,
+        ).returncode == 0
+    except Exception:
+        return False
+
+
+def _git_commits_since(path: Path, since_iso: str | None, window: str) -> int:
+    since = since_iso or parse_since(window).isoformat()
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(path), "rev-list", "--count", f"--since={since}", "HEAD"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+        ).stdout.strip()
+        return int(out or "0")
+    except Exception:
+        return 0
+
+
+def _has_capture(path: Path) -> bool:
+    base = sm_dir(path)
+    if (base / "allocations" / "allocation-ledger.json").exists():
+        return True
+    traces = base / "traces" / "claude-code"
+    return traces.is_dir() and any(traces.glob("*.jsonl"))
+
+
+def fleet_status(path_str: str, window: str = "90d") -> dict[str, Any]:
+    """A producer-agnostic accountability read of one project — is anyone behind
+    its recent work, and how stale. Reads ``.stillmirror`` state if present; falls
+    back to git-only (the wedge) for projects built elsewhere (e.g. Codex)."""
+    path = Path(path_str).expanduser().resolve()
+    name = path.name or str(path)
+    blank = {
+        "project": name, "path": str(path), "source": "missing",
+        "accountable": False, "attested_by": None, "last_attested_at": None,
+        "staleness_days": None, "pending_proposal": False, "owed": 0, "owed_unit": "—",
+    }
+    if not path.is_dir():
+        return blank
+    # Universal accountability signal — both producers attest to the same place.
+    has_state = sm_dir(path).exists()
+    last_att = last_attestation(path) if has_state else None
+    pending = (latest_pending_proposal(path) is not None) if has_state else False
+    last_at = last_att.get("recorded_at") if last_att else None
+    staleness = None
+    if last_at:
+        when = parse_time(last_at)
+        if when is not None:
+            staleness = max(0, (dt.datetime.now(dt.timezone.utc) - when).days)
+    # Source-appropriate detail (no artifacts written into the read project).
+    if _has_capture(path):
+        source, owed, unit = "capture", compute_review_due(path, 20)["new_allocations"], "allocation(s)"
+    elif _is_git_repo(path):
+        source, owed, unit = "git-only", _git_commits_since(path, last_at, window), "commit(s)"
+    else:
+        source, owed, unit = "none", 0, "—"
+    return {
+        "project": name, "path": str(path), "source": source,
+        "accountable": last_att is not None,
+        "attested_by": last_att.get("attested_by") if last_att else None,
+        "last_attested_at": last_at, "staleness_days": staleness,
+        "pending_proposal": pending, "owed": owed, "owed_unit": unit,
+    }
+
+
+def _fleet_sort_key(s: dict[str, Any]) -> tuple[int, int, int]:
+    # Empty seats first; within attested, stalest first; then most owed.
+    return (1 if s["accountable"] else 0, -(s["staleness_days"] or 0), -s["owed"])
+
+
+def render_fleet(statuses: list[dict[str, Any]]) -> str:
+    ordered = sorted(statuses, key=_fleet_sort_key)
+    lines = [
+        "# StillMirror fleet — where your attention is owed",
+        "",
+        "Evidence about owed attention across your projects, most-owed first. This is",
+        "navigation, never a ranking — no scores, no best/worst. Local only: it names",
+        "your own projects and is never transmitted.",
+        "",
+    ]
+    real = 0
+    for s in ordered:
+        if s["source"] == "missing":
+            lines.append(f"- **{s['project']}** — path not found.")
+            continue
+        if s["source"] == "none":
+            lines.append(f"- **{s['project']}** — not yet under StillMirror (no capture state, not a git repo).")
+            continue
+        real += 1
+        producer = "claude-code (capture)" if s["source"] == "capture" else "git-only (wedge)"
+        draft = " · a draft awaits ratification" if s["pending_proposal"] else ""
+        if not s["accountable"]:
+            lines.append(
+                f"- **{s['project']}** — {producer} — **EMPTY SEAT**: no one has stood behind "
+                f"{s['owed']} {s['owed_unit']} of recent work{draft}."
+            )
+        else:
+            stale = f"{s['staleness_days']}d ago" if s["staleness_days"] is not None else "recently"
+            lines.append(
+                f"- **{s['project']}** — {producer} — last stood behind by {s['attested_by']} "
+                f"{stale}; {s['owed']} {s['owed_unit']} unreviewed since{draft}."
+            )
+    empty = sum(1 for s in ordered if s["source"] in ("capture", "git-only") and not s["accountable"])
+    lines.extend(["", f"_Empty seats: {empty} of {real} project(s) under StillMirror._"])
+    return "\n".join(lines) + "\n"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="StillMirror Review local helper")
     sub = parser.add_subparsers(dest="command")
@@ -2339,6 +2455,10 @@ def main() -> int:
     aggregate = sub.add_parser("aggregate")
     aggregate.add_argument("paths", nargs="+", help="maintainer-review.json sidecars or directories of them")
     aggregate.add_argument("--out-dir", default="")
+    fleet = sub.add_parser("fleet")
+    fleet.add_argument("paths", nargs="+", help="project directories (one path each; shell globs expand)")
+    fleet.add_argument("--window", default="90d", help="recent-work window for never-attested git-only projects")
+    fleet.add_argument("--json", action="store_true", dest="as_json", help="machine-readable output")
     focus = sub.add_parser("focus")
     focus.add_argument("ref", nargs="?", default="", help="goal reference or new statement to declare as current intent")
     focus.add_argument("--note", default="")
@@ -2428,6 +2548,12 @@ def main() -> int:
     elif args.command == "aggregate":
         result = aggregate_reviews(args.paths, args.out_dir)
         print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.command == "fleet":
+        statuses = [fleet_status(p, args.window) for p in args.paths]
+        if args.as_json:
+            print(json.dumps({"generated_at": utc_now(), "fleet": statuses}, ensure_ascii=False, indent=2))
+        else:
+            print(render_fleet(statuses))
     elif args.command == "focus":
         if args.list_focus:
             print(json.dumps({"focus": list_focus(root)}, ensure_ascii=False, indent=2))

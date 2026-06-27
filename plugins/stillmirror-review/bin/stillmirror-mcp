@@ -124,6 +124,23 @@ TOOLS = [
             "required": ["project_path", "decision", "attested_by"],
         },
     },
+    {
+        "name": "fleet",
+        "description": (
+            "Cross-project overseer view: across several projects, where is the user's "
+            "attention owed — which have an EMPTY SEAT (no one has stood behind recent "
+            "work) and how stale each attestation is. Producer-agnostic: reads capture "
+            "state where present, else git-only. Present it as 'where to look next', "
+            "navigation — never a ranking or best/worst."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project_paths": {"type": "array", "items": {"type": "string"}, "description": "Absolute paths to the projects in the fleet"},
+            },
+            "required": ["project_paths"],
+        },
+    },
 ]
 
 
@@ -195,6 +212,17 @@ def call_tool(name: str, args: dict[str, Any]) -> str:
         if args.get("note"):
             cli_args += ["--note", str(args["note"])]
         return run_cli(project_path, cli_args)
+    if name == "fleet":
+        paths = args.get("project_paths") or []
+        if not paths:
+            return "error: project_paths is required — list the projects in the fleet."
+        proc = subprocess.run(
+            [sys.executable, CLI, "fleet", *[str(p) for p in paths], "--json"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+        )
+        if proc.returncode != 0:
+            return f"error: {(proc.stderr or proc.stdout).strip()}"
+        return proc.stdout.strip()
     return f"error: unknown tool {name}"
 
 
