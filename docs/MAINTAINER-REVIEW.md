@@ -6,8 +6,10 @@ core, or drowning in maintenance?* — from `git` alone. No plugin install, no h
 capture: run it on any repo you have cloned.
 
 It is the **wedge**: a parallel adoption channel, decoupled from the
-capture-based spine. Its distribution is designed in — the output is a **badge**
-you commit to your README, so every repo visitor sees it.
+capture-based spine. Its distribution is designed in across **two channels** — a
+**badge** you commit to your README for the human glance, and a name-free
+**`maintainer-summary.json`** machine endpoint a reviewer (human or AI) can fetch
+(see *Two channels* below), so reach is not bet on human eyeballs alone.
 
 ## Run it
 

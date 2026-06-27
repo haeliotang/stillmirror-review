@@ -21,14 +21,17 @@ stillmirror-review review-due
   "last_reviewed_at": "2026-06-20T10:00:00Z",
   "new_allocations": 42,
   "new_goal_events": 1,
-  "sessions_touched": 7
+  "sessions_touched": 7,
+  "ever_attested": true
 }
 ```
 
 `sessions_touched` is the multi-agent number: how many distinct agent threads ran
 since you last looked. The clock resets when you `alignment record`.
+`ever_attested` is `false` when **no one has stood behind this work yet** — an
+empty judgment seat, surfaced rather than papered over (a v0.9 abdication signal).
 
-## SessionStart nudge (human re-engagement boundary)
+## SessionStart nudge (re-engagement boundary)
 
 A second SessionStart hook can emit a single quiet line when a review is due. It
 is **off by default** and silent unless both conditions hold: you opted in, and a
@@ -39,15 +42,20 @@ export STILLMIRROR_SESSION_NUDGE=1        # opt in (otherwise silent)
 export STILLMIRROR_NUDGE_THRESHOLD=20     # new allocations before nudging (default 20)
 ```
 
-When due, the hook adds one line of `additionalContext` at session start:
+When due, the hook adds one line of `additionalContext` at session start. The
+message is **consumer-agnostic** — addressed to whatever attends, a human *or* a
+review process, never assuming a human is in the loop:
 
 ```text
-StillMirror: 42 allocation(s) across 7 session(s) and 1 goal event(s) since your
-last review — run /stillmirror-review:review
+StillMirror: 42 allocation(s) across 7 thread(s) and 1 goal event(s) are
+unattested since the last attestation. No one has stood behind this work yet. A
+reviewer — you or a review process — should attend; nothing is settled until
+someone accountable stands behind it. Run /stillmirror-review:review.
 ```
 
 This keeps the v0.2 principle that hooks stay silent by default; the nudge never
-interrupts work mid-flight.
+interrupts work mid-flight. The same state is queryable as JSON via `review-due`
+for automation.
 
 ## PR-time review (work-product boundary)
 

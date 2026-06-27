@@ -15,6 +15,11 @@ It tracks three things and joins them for human review:
 - **where work was allocated** (evidence),
 - **where human alignment review is needed** (the join).
 
+(The v0.9 entry below refines this: the evidence substrate is *consumer-agnostic*
+— a human today, a reviewer-AI tomorrow may do the reading — but the terminus
+stays a **named human attestation**, and an empty judgment seat is surfaced, not
+filled.)
+
 ```text
 Problem is a hypothesis.
 Allocation is evidence.
@@ -92,7 +97,7 @@ honest:
 - **v0.2 — The Trustworthy Spine**: evidence receipts, correction loop, coverage
   / blind-spot honesty, goal-event log, reinforcement join, and wiring the
   mainline-hypothesis. Reframe + artifact rename.
-- **v0.3 — Review ritual & triggers** *(current)*: review-due state; a
+- **v0.3 — Review ritual & triggers** *(shipped)*: review-due state; a
   human-boundary SessionStart nudge (opt-in) and a PR-time `--base` review;
   triage aggregation (by goal, by agent thread, surfaced exceptions) in the
   review. See [TRIGGERS.md](TRIGGERS.md).
@@ -112,8 +117,11 @@ honest:
   that auto-refreshes the badge on a dedicated orphan branch (the self-propagating
   loop), and an **authorship & accountability** view (bot / human-attested /
   human) that surfaces how much of a flood carries explicit human accountability,
-  as composition, never a ranking. Distribution is designed in (the badge is the
-  ad); opt-in **PR/issue enrichment** (via `gh`, git-only stays the default); and
+  as composition, never a ranking. Distribution is designed in across **two
+  channels** — a **badge** for the human glance and a name-free
+  **`maintainer-summary.json`** machine endpoint a reviewer (human or AI) can
+  fetch, published next to the badge — so reach is not bet on human eyeballs
+  alone; opt-in **PR/issue enrichment** (via `gh`, git-only stays the default); and
   an **anonymized aggregate** (`aggregate`) — a "State of OSS Maintenance" report
   that names no project or contributor. See
   [MAINTAINER-REVIEW.md](MAINTAINER-REVIEW.md). *Deferred:* a Marketplace listing
@@ -171,6 +179,10 @@ honest:
     rather than fill the empty seat."** The human narrows to the irreducible
     accountability terminus; the moment-to-moment reviewing may be a human or an
     AI consuming the same auditable substrate.
+  - **v0.9.1** turns two of these from narrative into mechanism: `correct` takes
+    a named `--attested-by` attester (a relabel is itself an accountable act, not
+    a silent edit), and the wedge ships the machine-discoverable
+    `maintainer-summary.json` endpoint alongside the badge.
 - **v1.0 — Objective provenance-lite for agentic projects.**
 - **Deferred** — research / writing drift review.
 

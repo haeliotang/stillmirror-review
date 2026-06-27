@@ -47,16 +47,18 @@ You can also run the bundled scripts directly:
 plugins/stillmirror-review/bin/stillmirror-review init
 plugins/stillmirror-review/bin/stillmirror-review problem set "Validate StillMirror as a review layer"
 plugins/stillmirror-review/bin/stillmirror-review goals add "Maintain hook reliability"
+plugins/stillmirror-review/bin/stillmirror-review focus "Maintain hook reliability"   # declare current intent (ground-truth linkage)
+plugins/stillmirror-review/bin/stillmirror-review focus --clear
 plugins/stillmirror-review/bin/stillmirror-review goals replace "Maintain hook reliability" --with "Ship a trustworthy review layer"
 plugins/stillmirror-review/bin/stillmirror-review goals retire "<goal id or statement>"
 plugins/stillmirror-review/bin/stillmirror-review goals events
 plugins/stillmirror-review/bin/stillmirror-review ledger --since 30d
-plugins/stillmirror-review/bin/stillmirror-review correct --event <event_id> --label evaluation
+plugins/stillmirror-review/bin/stillmirror-review correct --event <event_id> --label evaluation --attested-by "Your Name"
 plugins/stillmirror-review/bin/stillmirror-review review-due
 plugins/stillmirror-review/bin/stillmirror-review review --since 30d
 plugins/stillmirror-review/bin/stillmirror-review review --base origin/main
 plugins/stillmirror-review/bin/stillmirror-review maintainer-review --since 90d
-plugins/stillmirror-review/bin/stillmirror-review alignment record --label necessary_support
+plugins/stillmirror-review/bin/stillmirror-review alignment record --label necessary_support --attested-by "Your Name"
 plugins/stillmirror-review/bin/stillmirror-review alignment list
 ```
 
@@ -64,18 +66,23 @@ plugins/stillmirror-review/bin/stillmirror-review alignment list
 
 `maintainer-review` is a parallel, capture-free, git-only review for open-source
 maintainers — *advancing the core, or drowning in maintenance?* It needs no
-install and runs on any cloned repo; its output is a committable **badge** (the
-badge is the distribution), plus a report and a machine sidecar with
-cross-project `canonical_counts`. Evidence, not verdict; neutral badge color. See
+install and runs on any cloned repo. It writes a committable **badge** (the human
+glance), a name-free **`maintainer-summary.json`** (the machine-discoverable
+evidence endpoint a reviewer — human or AI — fetches), plus a report and a full
+sidecar with cross-project `canonical_counts`. Evidence, not verdict; neutral
+badge color. See
 [docs/MAINTAINER-REVIEW.md](https://github.com/haeliotang/stillmirror-review/blob/main/docs/MAINTAINER-REVIEW.md).
 
 ## Triggers (review when it matters)
 
 Review is triggered at **human** and **work-product** boundaries, never per agent
-or per task. `review-due` reports what accumulated since your last review
-(including `sessions_touched`); an opt-in SessionStart nudge
-(`STILLMIRROR_SESSION_NUDGE=1`) surfaces it as one quiet line; and
-`review --base <ref>` scopes a review to a branch at PR time. The review's
+or per task. `review-due` reports what accumulated since the last attestation
+(including `sessions_touched` and `ever_attested`) as a **consumer-agnostic
+signal** — JSON for automation, or an opt-in SessionStart nudge
+(`STILLMIRROR_SESSION_NUDGE=1`) addressed to whoever attends (a human *or* a
+review process); and `review --base <ref>` scopes a review to a branch at PR
+time. An **empty judgment seat** (work no one has stood behind) is surfaced as a
+finding, not hidden. The review's
 **Triage** section clusters a flood of multi-agent work by goal and by agent
 thread and surfaces exceptions — always decomposable to receipts, never a
 ranking. See [docs/TRIGGERS.md](https://github.com/haeliotang/stillmirror-review/blob/main/docs/TRIGGERS.md).
@@ -88,7 +95,7 @@ The plugin writes only inside the current project:
 .stillmirror/
   traces/
   problems/      mainline-hypothesis.json
-  goals/         accepted-goals.json, goal-events.jsonl
+  goals/         accepted-goals.json, goal-events.jsonl, focus.jsonl
   allocations/   allocation-ledger.json, corrections.jsonl, rubric.json
   alignment/     alignment-reviews.jsonl
   reviews/       *-project-alignment-review.md
