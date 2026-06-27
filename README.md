@@ -8,7 +8,9 @@ The review layer for agentic work.
 StillMirror Review is a Claude Code plugin that helps you review *what you
 actually let happen* versus *what you meant*. It joins two spines — the goals you
 accepted (authorization provenance) and where agent work was allocated
-(evidence) — and surfaces them for your own alignment review. It helps answer:
+(evidence) — and surfaces them as **auditable evidence for review**: by you
+today, or a review process tomorrow, with a **named human attestation** as the
+terminus. It helps answer:
 
 - what problem seems to be driving the project;
 - where attention and agent work are actually allocated;
@@ -42,7 +44,8 @@ One loop, one story — **what you meant ⋈ what happened ⋈ who stood behind 
   thread when many agents run.
 - **Wedge** — `maintainer-review` (+ the GitHub Action): the same lens on a
   public repo, as a committable badge.
-- **Surfaces** — Claude Code (this plugin) and Claude Desktop (the MCP adapter).
+- **Surfaces** — Claude Code (this plugin) and Claude Desktop (the
+  [MCP adapter](docs/MCP-ADAPTER.md)).
 
 Everything is **auditable evidence** for review — yours today, a review process's
 tomorrow; the only verdict is a **named human attestation**, and an empty
@@ -119,14 +122,7 @@ For local testing from a checkout:
 claude --plugin-dir ./plugins/stillmirror-review
 ```
 
-Then use the included skills:
-
-```text
-/stillmirror-review:init
-/stillmirror-review:ledger
-/stillmirror-review:review
-/stillmirror-review:goals
-```
+The same four skills (`init`, `goals`, `ledger`, `review`) are available.
 
 ## Direct CLI usage
 
@@ -142,7 +138,7 @@ plugins/stillmirror-review/bin/stillmirror-review goals replace "Maintain hook r
 plugins/stillmirror-review/bin/stillmirror-review goals retire "<goal id or statement>"
 plugins/stillmirror-review/bin/stillmirror-review goals events
 plugins/stillmirror-review/bin/stillmirror-review ledger --since 30d
-plugins/stillmirror-review/bin/stillmirror-review correct --event <event_id> --label evaluation
+plugins/stillmirror-review/bin/stillmirror-review correct --event <event_id> --label evaluation --attested-by "Your Name"
 plugins/stillmirror-review/bin/stillmirror-review review-due
 plugins/stillmirror-review/bin/stillmirror-review review --since 30d
 plugins/stillmirror-review/bin/stillmirror-review review --base origin/main
@@ -161,25 +157,30 @@ fleet review-debt map — where your attention is owed, never a ranking of agent
 
 A capture-free, git-only review for open-source maintainers — *is this project
 advancing its core, or drowning in maintenance?* It needs no install and runs on
-any cloned repo, and its output is a **badge** you commit to your README (the
-badge is the distribution):
+any cloned repo:
 
 ```sh
 plugins/stillmirror-review/bin/stillmirror-review maintainer-review --since 90d
 ```
 
-It writes a report, a shields.io badge JSON, and a machine sidecar (with
-cross-project `canonical_counts`). Evidence, not verdict; the badge color is
-neutral by design. See [docs/MAINTAINER-REVIEW.md](docs/MAINTAINER-REVIEW.md).
+It writes a report, a shields.io **badge** (the human glance), a **name-free
+`maintainer-summary.json`** (the machine-discoverable evidence endpoint a
+reviewer — human or AI — fetches), and a full local sidecar. The GitHub Action
+publishes the badge *and* the summary to a branch, so distribution is not bet on
+human eyeballs alone. Evidence, not verdict; the badge color is neutral by
+design. See [docs/MAINTAINER-REVIEW.md](docs/MAINTAINER-REVIEW.md).
 
 ## Triggers
 
 A review layer is worthless if review never happens. StillMirror triggers review
 at **human** and **work-product** boundaries — never per agent or per task (those
-do not scale to many agents). `review-due` reports what accumulated since your
-last review (including `sessions_touched`, the number of agent threads); an
-opt-in SessionStart nudge surfaces it; and `review --base <ref>` scopes a review
-to a branch at PR time. See [docs/TRIGGERS.md](docs/TRIGGERS.md).
+do not scale to many agents). `review-due` reports what accumulated since the
+last attestation (including `sessions_touched`, the number of agent threads, and
+`ever_attested`), as a **consumer-agnostic signal** — JSON for automation, or a
+quiet opt-in SessionStart nudge addressed to whoever attends (a human *or* a
+review process). `review --base <ref>` scopes a review to a branch at PR time;
+and an **empty judgment seat** (work no one has stood behind) is surfaced as a
+finding, not hidden. See [docs/TRIGGERS.md](docs/TRIGGERS.md).
 
 ## What gets written
 
@@ -189,9 +190,9 @@ StillMirror Review writes local project state under:
 .stillmirror/
   traces/
   problems/         mainline-hypothesis.json
-  goals/            accepted-goals.json, goal-events.jsonl
+  goals/            accepted-goals.json, goal-events.jsonl, focus.jsonl
   allocations/      allocation-ledger.json, corrections.jsonl
-  alignment/
+  alignment/        alignment-reviews.jsonl
   reviews/
 ```
 
@@ -226,6 +227,10 @@ Each `AllocationEntry` can use one or more labels:
 StillMirror Review does not output drift scores, productivity scores,
 objective-capture diagnoses, personality judgments, or recommendations about
 what your goals should be.
+
+For the why — the convergent vision, the roadmap, and the principles (including
+the accountability floor and the no-human-in-the-loop reframe) — see
+[docs/VISION.md](docs/VISION.md).
 
 ## Development
 
