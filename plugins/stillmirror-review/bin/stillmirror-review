@@ -672,16 +672,34 @@ def last_attestation(root: Path) -> dict[str, Any] | None:
     return chosen[-1] if chosen else None
 
 
+def agent_label(entry: dict[str, Any]) -> str:
+    """A display key for the agent behind an entry, or the main/legacy bucket.
+
+    Real subagent identity (``agent.id`` from a subagent PostToolUse) reads as
+    ``<type>:<short-id>``; main-agent and pre-0.9.2 events have none and fall
+    together. A session is *not* an agent — see fleet_review_debt's two axes.
+    """
+    agent = entry.get("agent") or {}
+    agent_id = str(agent.get("id") or "")
+    if not agent_id:
+        return "(main / pre-0.9.2)"
+    agent_type = str(agent.get("type") or "agent")
+    return f"{agent_type}:{agent_id[:8]}"
+
+
 def fleet_review_debt(entries: list[dict[str, Any]], reference: dt.datetime) -> dict[str, Any]:
-    """Map the unpaid-review pile across agent threads.
+    """Map the unpaid-review pile, by problem / by session / by agent.
 
     Ledger entries after the last human attestation that are not ``corrected``
-    and carry a non-``noise`` label, aggregated **by problem** and **by thread**.
-    This is evidence about the review *you* owe the fleet's output — never a
-    measure of any agent's work, cost, or rank.
+    and carry a non-``noise`` label. Three honest axes: **by problem**, **by
+    session** (top-level Claude Code session), and **by agent** (real subagent
+    identity where present — a session is not an agent). Evidence about the
+    review *you* owe the fleet's output — never a measure of any agent's work,
+    cost, or rank.
     """
     by_problem: Counter[str] = Counter()
-    by_thread: Counter[str] = Counter()
+    by_session: Counter[str] = Counter()
+    by_agent: Counter[str] = Counter()
     owed = 0
     for entry in entries:
         if entry.get("review_state") == "corrected":
@@ -695,8 +713,14 @@ def fleet_review_debt(entries: list[dict[str, Any]], reference: dt.datetime) -> 
         owed += 1
         for label in labels:
             by_problem[label] += 1
-        by_thread[entry.get("session") or "(non-session: git/other)"] += 1
-    return {"owed": owed, "by_problem": by_problem, "by_thread": by_thread}
+        by_session[entry.get("session") or "(non-session: git/other)"] += 1
+        by_agent[agent_label(entry)] += 1
+    return {
+        "owed": owed,
+        "by_problem": by_problem,
+        "by_session": by_session,
+        "by_agent": by_agent,
+    }
 
 
 def event_text(event: dict[str, Any]) -> str:
@@ -904,7 +928,7 @@ def last_reviewed_at(root: Path) -> dt.datetime | None:
 def compute_review_due(root: Path, threshold: int) -> dict[str, Any]:
     """Derive whether a review is due, keyed to *human* boundaries, not agents.
 
-    "New since your last review" aggregates across every session/agent thread,
+    "New since your last review" aggregates across every session and subagent,
     so one human return surfaces one number no matter how many agents ran.
     No persisted state: everything is derived from existing traces, goal events,
     and the last alignment record.
@@ -921,6 +945,13 @@ def compute_review_due(root: Path, threshold: int) -> dict[str, Any]:
         str(event.get("session_id_hash") or "")
         for event in new_allocations
         if event.get("session_id_hash")
+    }
+    # Distinct subagents seen (by agent_id) — a separate, honest number from
+    # sessions: many subagents fold into one top-level session.
+    agents = {
+        (str(event.get("agent_type") or ""), str(event.get("agent_id_hash") or ""))
+        for event in new_allocations
+        if event.get("agent_id_hash")
     }
     goal_events = list_goal_events(root)
     if reference is not None:
@@ -939,6 +970,7 @@ def compute_review_due(root: Path, threshold: int) -> dict[str, Any]:
         "new_allocations": len(new_allocations),
         "new_goal_events": len(goal_events),
         "sessions_touched": len(sessions),
+        "agents_touched": len(agents),
     }
 
 
@@ -978,9 +1010,11 @@ def run_nudge(threshold: int) -> int:
     if not status["due"]:
         return 0
     seat = "" if status.get("ever_attested") else " No one has stood behind this work yet."
+    agents = status.get("agents_touched") or 0
+    fleet = f" ({agents} subagent(s))" if agents else ""
     message = (
         f"StillMirror: {status['new_allocations']} allocation(s) across "
-        f"{status['sessions_touched']} thread(s) and {status['new_goal_events']} "
+        f"{status['sessions_touched']} session(s){fleet} and {status['new_goal_events']} "
         f"goal event(s) are unattested since the last attestation.{seat} A reviewer — "
         f"you or a review process — should attend; nothing is settled until someone "
         f"accountable stands behind it. Run /stillmirror-review:review."
@@ -1104,6 +1138,10 @@ def build_ledger(root: Path, since_value: str, base: str | None = None) -> dict[
             "timestamp": event.get("captured_at") or utc_now(),
             "event_id": event_id,
             "session": str(event.get("session_id_hash") or ""),
+            "agent": {
+                "type": str(event.get("agent_type") or ""),
+                "id": str(event.get("agent_id_hash") or ""),
+            },
             "source": event.get("hook_event_name") or "unknown",
             "resource_type": event.get("tool_name") or event.get("hook_event_name") or "unknown",
             "allocated_to": allocated_to,
@@ -1145,6 +1183,16 @@ def build_ledger(root: Path, since_value: str, base: str | None = None) -> dict[
     inferred_entries = sum(
         1 for entry in entries if entry["supports_mainline"] != "declared" and entry["allocated_to"] != ["noise"]
     )
+    # Distinct subagents observed — entries carrying a real agent identity
+    # (agent_id from a subagent PostToolUse). Main-agent / pre-0.9.2 events have
+    # no agent identity and are NOT counted here.
+    agents_observed = len(
+        {
+            (entry["agent"]["type"], entry["agent"]["id"])
+            for entry in entries
+            if entry["agent"]["id"]
+        }
+    )
     coverage = {
         "trace_events": trace_event_count,
         "git_commits": git_commit_count,
@@ -1154,10 +1202,15 @@ def build_ledger(root: Path, since_value: str, base: str | None = None) -> dict[
         "corrected_entries": corrected_entries,
         "declared_entries": declared_entries,
         "inferred_entries": inferred_entries,
+        "agents_observed": agents_observed,
         "not_captured": [
             "Decisions or reasoning that happened only in chat, not as tool calls.",
             "Work done outside Claude Code or outside this repository.",
             "The intent, effort, or impact behind any single event.",
+            "Per-agent attribution is by subagent agent_id: same-type agents share "
+            "a type label; agent-teams TaskCreated/TaskCompleted carry a task_id "
+            "but no agent_id; main-agent and pre-0.9.2 events have no agent "
+            "identity and group under the top-level session.",
         ],
     }
     if git_commit_count and trace_event_count == 0:
@@ -1253,7 +1306,8 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
             attested_line,
             f"- Unreviewed allocations since: {debt['new_allocations']}",
             f"- New goal events since: {debt['new_goal_events']}",
-            f"- Agent threads (sessions) since: {debt['sessions_touched']}",
+            f"- Top-level sessions since: {debt['sessions_touched']}",
+            f"- Distinct subagents since: {debt.get('agents_touched', 0)}",
         ]
     )
     # Make abdication visible: an empty judgment seat is the finding, not a default.
@@ -1263,7 +1317,7 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
                 "",
                 f"> **No one has stood behind this project's work yet.** "
                 f"{debt['new_allocations']} allocation(s) across {debt['sessions_touched']} "
-                "thread(s) are unattended. An empty judgment seat is itself the finding —"
+                "session(s) are unattended. An empty judgment seat is itself the finding —"
                 " review and attest, or name who is accountable.",
             ]
         )
@@ -1273,20 +1327,26 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
             count = fleet["by_problem"].get(label, 0)
             if count:
                 lines.append(f"- {label}: {count}")
-        lines.extend(["", "Threads with the most unattended output (where to look — not a ranking):"])
-        top = fleet["by_thread"].most_common(5)
-        for thread, count in top:
-            short = thread[:8] if thread and not thread.startswith("(") else thread
-            lines.append(f"- thread {short}: {count}")
-        remaining = len(fleet["by_thread"]) - len(top)
+        lines.extend(["", "Sessions with the most unattended output (where to look — not a ranking):"])
+        top = fleet["by_session"].most_common(5)
+        for session, count in top:
+            short = session[:8] if session and not session.startswith("(") else session
+            lines.append(f"- session {short}: {count}")
+        remaining = len(fleet["by_session"]) - len(top)
         if remaining > 0:
-            lines.append(f"  (+{remaining} more threads)")
+            lines.append(f"  (+{remaining} more sessions)")
+        # Real subagent identity, where present — a session is not an agent.
+        real_agents = {k: v for k, v in fleet["by_agent"].items() if not k.startswith("(")}
+        if real_agents:
+            lines.extend(["", "Subagents with the most unattended output (by agent_id — not a ranking):"])
+            for agent, count in Counter(real_agents).most_common(5):
+                lines.append(f"- {agent}: {count}")
         lines.extend(
             [
                 "",
-                "_This is your unpaid review attention — by problem and by thread. It is",
-                "evidence about what you owe the fleet's output, never a measure of any",
-                "agent's work, cost, or rank._",
+                "_This is your unpaid review attention — by problem, by session, and by",
+                "agent. It is evidence about what you owe the fleet's output,",
+                "never a measure of any agent's work, cost, or rank._",
             ]
         )
 
@@ -1348,6 +1408,15 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
         by_session.setdefault(key, Counter())
         for label in entry["allocated_to"]:
             by_session[key][label] += 1
+    # Real subagent identity (agent_id), kept separate — a session is not an agent.
+    by_agent: dict[str, Counter] = {}
+    for entry in entries:
+        akey = agent_label(entry)
+        if akey.startswith("("):
+            continue  # main agent / pre-0.9.2 — no subagent identity to attribute
+        by_agent.setdefault(akey, Counter())
+        for label in entry["allocated_to"]:
+            by_agent[akey][label] += 1
 
     lines.extend(
         [
@@ -1371,7 +1440,7 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
     lines.extend(
         [
             "",
-            "By session / agent thread (which problems each thread served — coverage, not a ranking):",
+            "By session (which problems each top-level session served — coverage, not a ranking):",
         ]
     )
     if by_session:
@@ -1381,6 +1450,16 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
             lines.append(f"- session {short}: {mix}")
     else:
         lines.append("- (no sessions in window)")
+    if by_agent:
+        lines.extend(
+            [
+                "",
+                "By agent (real subagent identity — a session is not an agent; coverage, not a ranking):",
+            ]
+        )
+        for key in sorted(by_agent):
+            mix = ", ".join(f"{label}:{count}" for label, count in by_agent[key].most_common())
+            lines.append(f"- {key}: {mix}")
     lines.extend(["", "Surfaced for review:"])
     if unlinked:
         ids = ", ".join(entry["event_id"] for entry in unlinked[:8])

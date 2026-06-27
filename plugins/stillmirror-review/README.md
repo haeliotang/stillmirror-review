@@ -77,14 +77,16 @@ badge color. See
 
 Review is triggered at **human** and **work-product** boundaries, never per agent
 or per task. `review-due` reports what accumulated since the last attestation
-(including `sessions_touched` and `ever_attested`) as a **consumer-agnostic
-signal** — JSON for automation, or an opt-in SessionStart nudge
+(including `sessions_touched`, `agents_touched` — distinct subagents, a separate
+number from sessions — and `ever_attested`) as a **consumer-agnostic signal** —
+JSON for automation, or an opt-in SessionStart nudge
 (`STILLMIRROR_SESSION_NUDGE=1`) addressed to whoever attends (a human *or* a
 review process); and `review --base <ref>` scopes a review to a branch at PR
 time. An **empty judgment seat** (work no one has stood behind) is surfaced as a
 finding, not hidden. The review's
-**Triage** section clusters a flood of multi-agent work by goal and by agent
-thread and surfaces exceptions — always decomposable to receipts, never a
+**Triage** section clusters a flood of multi-agent work by goal, by session, and
+by agent (real subagent identity from the captured `agent_id` — a session is not
+an agent) and surfaces exceptions — always decomposable to receipts, never a
 ranking. See [docs/TRIGGERS.md](https://github.com/haeliotang/stillmirror-review/blob/main/docs/TRIGGERS.md).
 
 ## What gets written

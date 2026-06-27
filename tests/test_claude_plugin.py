@@ -315,7 +315,8 @@ class StillMirrorPluginTests(unittest.TestCase):
             text = next((project / ".stillmirror" / "reviews").glob("*-project-alignment-review.md")).read_text()
             self.assertIn("## Triage — what's worth your attention", text)
             self.assertIn("unlinked (no goal signal):", text)
-            self.assertIn("By session / agent thread", text)
+            self.assertIn("By session (which problems", text)  # honest: a session is not an agent
+            self.assertNotIn("agent thread", text)  # the overclaim must stay gone
             self.assertIn("Surfaced ≠", text)  # "Surfaced ≠ judged wrong" disclaimer
 
     def test_base_scopes_to_branch_commits(self) -> None:
@@ -524,7 +525,7 @@ class StillMirrorPluginTests(unittest.TestCase):
             self.run_script(project, "review", "--since", "30d")
             self.assertIn("by Hao", review_file.read_text())
 
-    def test_review_debt_maps_fleet_by_problem_and_thread_and_resets(self) -> None:
+    def test_review_debt_maps_fleet_by_problem_and_session_and_resets(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             project = Path(temp)
             self.capture(project, {"hook_event_name": "PostToolUse", "cwd": str(project), "session_id": "agentA",
@@ -537,8 +538,9 @@ class StillMirrorPluginTests(unittest.TestCase):
             review_file = next((project / ".stillmirror" / "reviews").glob("*-project-alignment-review.md"))
             debt = review_file.read_text().split("## Review Debt", 1)[1].split("## Mainline", 1)[0]
             self.assertIn("Where your review is owed (by problem)", debt)
-            self.assertIn("Threads with the most unattended output", debt)
-            self.assertGreaterEqual(debt.count("- thread "), 2)  # aggregated across agent threads
+            self.assertIn("Sessions with the most unattended output", debt)
+            self.assertGreaterEqual(debt.count("- session "), 2)  # aggregated across top-level sessions
+            self.assertNotIn("agent thread", debt)  # a session is not an agent — overclaim gone
             self.assertIn("never a measure of any", debt)  # evidence, not a ranking
             self.assertNotIn("score", debt.casefold())
             self.assertNotIn("best", debt.casefold())
@@ -546,6 +548,74 @@ class StillMirrorPluginTests(unittest.TestCase):
             self.run_script(project, "alignment", "record", "--label", "necessary_support", "--attested-by", "Hao")
             self.run_script(project, "review", "--since", "30d")
             self.assertNotIn("Where your review is owed", review_file.read_text())
+
+    def test_capture_preserves_subagent_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            # A PostToolUse from inside a subagent carries agent_id + agent_type.
+            self.capture(project, {
+                "hook_event_name": "PostToolUse", "cwd": str(project), "session_id": "main",
+                "agent_id": "sub-abc", "agent_type": "Explore",
+                "tool_name": "Read", "tool_input": {"file_path": "x.py"},
+            })
+            # A main-agent event carries neither.
+            self.capture(project, {
+                "hook_event_name": "PostToolUse", "cwd": str(project), "session_id": "main",
+                "tool_name": "Read", "tool_input": {"file_path": "y.py"},
+            })
+            trace = next((project / ".stillmirror" / "traces" / "claude-code").glob("*.jsonl"))
+            raw = trace.read_text()
+            self.assertNotIn("sub-abc", raw)  # the raw agent_id is hashed, never stored
+            events = [json.loads(line) for line in raw.splitlines() if line.strip()]
+            sub = next(e for e in events if e.get("agent_type"))
+            self.assertEqual(sub["agent_type"], "Explore")
+            self.assertEqual(len(sub["agent_id_hash"]), 16)
+            main = next(e for e in events if not e.get("agent_type"))
+            self.assertNotIn("agent_id_hash", main)
+            self.assertNotIn("agent_type", main)
+
+    def test_ledger_and_review_attribute_per_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            # Two distinct subagents (same top-level session) + one main-agent event.
+            self.capture(project, {"hook_event_name": "PostToolUse", "cwd": str(project),
+                "session_id": "main", "agent_id": "sub-A", "agent_type": "Explore",
+                "tool_name": "Read", "tool_input": {"file_path": "a.py"}})
+            self.capture(project, {"hook_event_name": "PostToolUse", "cwd": str(project),
+                "session_id": "main", "agent_id": "sub-B", "agent_type": "Plan",
+                "tool_name": "Edit", "tool_input": {"file_path": "b.py", "description": "design plan"}})
+            self.capture(project, {"hook_event_name": "PostToolUse", "cwd": str(project),
+                "session_id": "main", "tool_name": "Read", "tool_input": {"file_path": "c.py"}})
+            self.run_script(project, "ledger", "--since", "30d")
+            ledger = self.load_ledger(project)
+            agents = {(e["agent"]["type"], bool(e["agent"]["id"])) for e in ledger["entries"]}
+            self.assertIn(("Explore", True), agents)
+            self.assertIn(("Plan", True), agents)
+            self.assertIn(("", False), agents)  # the main agent has no identity to attribute
+            self.assertEqual(ledger["coverage"]["agents_observed"], 2)
+            self.assertTrue(
+                any("agent_id" in note for note in ledger["coverage"]["not_captured"])
+            )  # the blind spot is named, not silent
+            # The review's Triage names the two subagents by agent — a session is not an agent.
+            self.run_script(project, "review", "--since", "30d")
+            text = next((project / ".stillmirror" / "reviews").glob("*-project-alignment-review.md")).read_text()
+            self.assertIn("By agent (real subagent identity", text)
+            self.assertIn("Explore:", text)
+            self.assertIn("Plan:", text)
+
+    def test_review_due_counts_subagents_separately_from_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            # Two subagents under one session — the honest multi-agent number.
+            self.capture(project, {"hook_event_name": "PostToolUse", "cwd": str(project),
+                "session_id": "main", "agent_id": "sub-A", "agent_type": "Explore",
+                "tool_name": "Read", "tool_input": {"file_path": "a.py"}})
+            self.capture(project, {"hook_event_name": "PostToolUse", "cwd": str(project),
+                "session_id": "main", "agent_id": "sub-B", "agent_type": "Explore",
+                "tool_name": "Read", "tool_input": {"file_path": "b.py"}})
+            status = json.loads(self.run_script(project, "review-due", "--threshold", "1").stdout)
+            self.assertEqual(status["sessions_touched"], 1)  # one top-level session
+            self.assertEqual(status["agents_touched"], 2)    # two distinct subagents
 
     def test_maintainer_review_pr_issues_degrades_gracefully(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

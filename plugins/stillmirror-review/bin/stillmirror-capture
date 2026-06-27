@@ -97,6 +97,17 @@ def normalize_event(payload: dict[str, Any]) -> dict[str, Any]:
         normalized["tool_input_summary"] = summarize_tool_input(tool_input, cwd)
     if payload.get("stop_hook_active") is not None:
         normalized["stop_hook_active"] = bool(payload.get("stop_hook_active"))
+    # Per-subagent identity: Claude Code puts agent_id (unique per subagent
+    # invocation) and agent_type on PostToolUse/SubagentStop when the call
+    # originates inside a subagent. agent_id is an opaque instance token — hashed
+    # like session_id; agent_type is a label like tool_name, kept clear so the
+    # review can name which kind of agent did the work. Absent for the main agent.
+    agent_id = payload.get("agent_id")
+    if agent_id:
+        normalized["agent_id_hash"] = sha(str(agent_id))[:16]
+    agent_type = payload.get("agent_type")
+    if agent_type:
+        normalized["agent_type"] = str(agent_type)
     event_id_source = json.dumps(normalized, sort_keys=True, ensure_ascii=False)
     normalized["event_id"] = sha(event_id_source)[:20]
     return normalized

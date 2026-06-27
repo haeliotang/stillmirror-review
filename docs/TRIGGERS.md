@@ -22,12 +22,15 @@ stillmirror-review review-due
   "new_allocations": 42,
   "new_goal_events": 1,
   "sessions_touched": 7,
+  "agents_touched": 3,
   "ever_attested": true
 }
 ```
 
-`sessions_touched` is the multi-agent number: how many distinct agent threads ran
-since you last looked. The clock resets when you `alignment record`.
+`sessions_touched` counts distinct **top-level Claude Code sessions**;
+`agents_touched` counts distinct **subagents** (by `agent_id`) — a separate,
+honest number, because many subagents fold into one session (a session is not an
+agent). The clock resets when you `alignment record`.
 `ever_attested` is `false` when **no one has stood behind this work yet** — an
 empty judgment seat, surfaced rather than papered over (a v0.9 abdication signal).
 
@@ -47,10 +50,10 @@ message is **consumer-agnostic** — addressed to whatever attends, a human *or*
 review process, never assuming a human is in the loop:
 
 ```text
-StillMirror: 42 allocation(s) across 7 thread(s) and 1 goal event(s) are
-unattested since the last attestation. No one has stood behind this work yet. A
-reviewer — you or a review process — should attend; nothing is settled until
-someone accountable stands behind it. Run /stillmirror-review:review.
+StillMirror: 42 allocation(s) across 7 session(s) (3 subagent(s)) and 1 goal
+event(s) are unattested since the last attestation. No one has stood behind this
+work yet. A reviewer — you or a review process — should attend; nothing is
+settled until someone accountable stands behind it. Run /stillmirror-review:review.
 ```
 
 This keeps the v0.2 principle that hooks stay silent by default; the nudge never

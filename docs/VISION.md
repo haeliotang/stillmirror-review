@@ -183,6 +183,26 @@ honest:
     a named `--attested-by` attester (a relabel is itself an accountable act, not
     a silent edit), and the wedge ships the machine-discoverable
     `maintainer-summary.json` endpoint alongside the badge.
+- **v0.9.2 — Per-agent attribution: capture the seam we were dropping**
+  *(shipped)*. An investigation (real traces + the verified hook schema) caught
+  an **overclaim**: entries grouped by `session_id_hash`, but every subagent
+  event folds into its parent session — "by agent thread" was really "by
+  session." The fix was in capture, not concept: Claude Code exposes per-subagent
+  `agent_id`/`agent_type` on subagent `PostToolUse`, and the normalizer was
+  discarding them. v0.9.2 preserves that identity (`agent_id` hashed like the
+  session id; `agent_type` kept as a label), carries an `agent` dimension on every
+  ledger entry, and makes Review Debt and Triage **truly per-agent** (by problem,
+  by session, by agent — a session is not an agent), with `agents_touched` beside
+  `sessions_touched` and a **named blind spot** (same-type agents share a label;
+  agent-teams `TaskCreated/Completed` carry no `agent_id`; pre-0.9.2 events have
+  none). **Foundation-first by design:** the per-agent *focus declaration* half is
+  **deferred** until there is real concurrent-agent capture to validate against —
+  but the data model carries both `agent_type` (the declarable, stable key) and
+  `agent_id` (per-invocation precision) so a future `active_focus_at(…,
+  agent_type, agent_id)` resolves most-specific-first without a rebuild.
+  **Non-goal:** inferring agent identity where the hook gives none — declare it or
+  name the blind spot, never guess. This is the same discipline that caught the
+  TaskCreated regression, applied to our own overclaim.
 - **v1.0 — Objective provenance-lite for agentic projects.**
 - **Deferred** — research / writing drift review.
 

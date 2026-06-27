@@ -26,8 +26,9 @@ The review must include:
 - Mainline Hypothesis;
 - Goal Provenance (each goal's lifecycle state and how many allocations
   reinforced it);
-- Triage — what's worth the user's attention (clusters by goal and by agent
-  thread, plus surfaced exceptions like unlinked work);
+- Triage — what's worth the user's attention (clusters by goal, by session, and
+  by agent — real subagent identity, a session is not an agent — plus surfaced
+  exceptions like unlinked work);
 - Allocation Ledger summary;
 - Observed Divergence;
 - questions for Alignment Review.
@@ -38,8 +39,8 @@ asserts trends. Surfaced ≠ judged wrong; not surfaced ≠ approved.
 
 To check whether a review is even due (e.g. before nudging the user), run
 `"${CLAUDE_PLUGIN_ROOT}/bin/stillmirror-review" review-due`; it reports new
-allocations, new goal events, and how many agent threads ran since the last
-review.
+allocations, new goal events, how many top-level sessions ran, and how many
+distinct subagents (`agents_touched`) ran since the last review.
 
 Present the labels as a rough prompt for the user's review, never as a
 measurement. Do not output drift scores, productivity scores, objective-capture

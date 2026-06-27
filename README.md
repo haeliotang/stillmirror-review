@@ -40,8 +40,9 @@ One loop, one story — **what you meant ⋈ what happened ⋈ who stood behind 
   --attested-by` (a named human stands behind the review). This is the
   irreducible gate; nothing the tool produces is a verdict.
 - **Triggers** — `review-due` and the opt-in SessionStart nudge, so review
-  actually happens; **Review Debt** maps the unreviewed pile by problem and by
-  thread when many agents run.
+  actually happens; **Review Debt** maps the unreviewed pile by problem, by
+  session, and **by agent** (real subagent identity, from the captured
+  `agent_id`) when many agents run — a session is not an agent.
 - **Wedge** — `maintainer-review` (+ the GitHub Action): the same lens on a
   public repo, as a committable badge.
 - **Surfaces** — Claude Code (this plugin) and Claude Desktop (the
@@ -69,7 +70,7 @@ claude plugin details stillmirror-review
 Expected shape:
 
 ```text
-stillmirror-review 0.9.1
+stillmirror-review 0.9.2
   The review layer for agentic work. Joins accepted-goal provenance with
   allocation evidence for user alignment review.
   Source: stillmirror-review@stillmirror
@@ -150,8 +151,10 @@ plugins/stillmirror-review/bin/stillmirror-review alignment record --label neces
 
 The review now also reports **Review Debt** — agent work you authorized but have
 not yet stood behind, measured against your last human-attested review. For
-multi-agent work it maps that unreviewed pile **by problem and by thread** (a
-fleet review-debt map — where your attention is owed, never a ranking of agents).
+multi-agent work it maps that unreviewed pile **by problem, by session, and by
+agent** — real subagent identity from the captured `agent_id` (a session is not
+an agent) — a fleet review-debt map where your attention is owed, never a ranking
+of agents.
 
 ## Maintainer review (the wedge)
 
@@ -175,8 +178,9 @@ design. See [docs/MAINTAINER-REVIEW.md](docs/MAINTAINER-REVIEW.md).
 A review layer is worthless if review never happens. StillMirror triggers review
 at **human** and **work-product** boundaries — never per agent or per task (those
 do not scale to many agents). `review-due` reports what accumulated since the
-last attestation (including `sessions_touched`, the number of agent threads, and
-`ever_attested`), as a **consumer-agnostic signal** — JSON for automation, or a
+last attestation (including `sessions_touched`, `agents_touched` — distinct
+subagents, a separate number from sessions — and `ever_attested`), as a
+**consumer-agnostic signal** — JSON for automation, or a
 quiet opt-in SessionStart nudge addressed to whoever attends (a human *or* a
 review process). `review --base <ref>` scopes a review to a branch at PR time;
 and an **empty judgment seat** (work no one has stood behind) is surfaced as a
@@ -201,8 +205,9 @@ goal tokens behind its label — so you can audit *why* it was classified, not j
 trust it. When you `correct` an entry, the ledger honors that human label on
 every later run. The review also reports **coverage / blind spots** (what
 StillMirror structurally could not see) and a **Triage** section that, for a
-flood of multi-agent work, clusters allocations by goal and by agent thread and
-surfaces exceptions for review — always decomposable back to receipts, never a
+flood of multi-agent work, clusters allocations by goal, by session, and by agent
+(real subagent identity) and surfaces exceptions for review — always decomposable
+back to receipts, never a
 score or ranking.
 
 The default hook capture stores sanitized event summaries, hashes, resource

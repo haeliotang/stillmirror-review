@@ -32,9 +32,19 @@ Functional gates:
 - `review` emits a Markdown **Project Alignment Review** with Coverage & Blind
   Spots, Goal Provenance, and **Triage** sections, and no drift scores or
   verdicts.
-- `review-due` derives `new_allocations`, `new_goal_events`, and
-  `sessions_touched` since the last alignment record, and `due` flips on
-  threshold.
+- `review-due` derives `new_allocations`, `new_goal_events`,
+  `sessions_touched`, and `agents_touched` (distinct subagents, a separate number
+  from sessions) since the last alignment record, and `due` flips on threshold.
+- hook capture preserves per-subagent identity when present: `agent_id` (hashed
+  to `agent_id_hash`) and `agent_type` (a clear label) from subagent
+  `PostToolUse`/`SubagentStop`; main-agent events carry neither. Each ledger
+  entry carries an `agent` dimension, and `coverage.agents_observed` counts
+  distinct subagents with a named blind spot (same-type agents share a label;
+  agent-teams task events carry no `agent_id`; pre-0.9.2 and main-agent events
+  group under the top-level session — a session is not an agent).
+- `review` Triage and Review Debt attribute **by problem, by session, and by
+  agent** (real subagent identity where present), never labeling a session an
+  agent and never ranking agents.
 - the SessionStart `review-due --nudge` hook is silent unless
   `STILLMIRROR_SESSION_NUDGE=1` and a review is due; its message is
   consumer-agnostic (addressed to a human *or* a review process).
