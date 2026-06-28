@@ -84,7 +84,7 @@ claude plugin details stillmirror-review
 Expected shape:
 
 ```text
-stillmirror-review 0.9.5
+stillmirror-review 0.9.6
   The review layer for agentic work. Joins accepted-goal provenance with
   allocation evidence for user alignment review.
   Source: stillmirror-review@stillmirror
@@ -93,7 +93,7 @@ Component inventory
   Skills (4)  goals, init, ledger, review
   Hooks (8)  SessionStart, UserPromptSubmit, PostToolUse, SubagentStop,
              TaskCreated, TaskCompleted, Stop, SessionEnd
-  MCP servers (0)
+  MCP servers (1)  stillmirror-mcp
 ```
 
 Then run a project-level smoke test in a target repository:

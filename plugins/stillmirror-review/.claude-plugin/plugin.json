@@ -1,6 +1,6 @@
 {
   "name": "stillmirror-review",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "description": "The review layer for agentic work. Joins accepted-goal provenance with allocation evidence for user alignment review.",
   "author": {
     "name": "Haelio Tang",
@@ -8,5 +8,14 @@
   },
   "homepage": "https://github.com/haeliotang/stillmirror-review",
   "repository": "https://github.com/haeliotang/stillmirror-review.git",
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "mcpServers": {
+    "stillmirror-mcp": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/stillmirror-mcp"],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
 }

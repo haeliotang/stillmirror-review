@@ -12,7 +12,7 @@ It is a **thin adapter over the CLI** — it shells out to `stillmirror-review`,
 so it inherits all of its logic and its discipline. Stdlib-only JSON-RPC over
 stdio; no new dependencies.
 
-## What it exposes (5 tools)
+## What it exposes (6 tools)
 
 | tool | what it does |
 |---|---|
@@ -21,6 +21,19 @@ stdio; no new dependencies.
 | `record_alignment` | records the **user's own** attestation — labels the user chose, named to the accountable human |
 | `propose_alignment` | the assistant **drafts** an attestation (labels + plain note) for the user to ratify — a draft, **not** an attestation; the seat stays empty until ratified |
 | `ratify_alignment` | records the user's **accept / amend / reject** of a draft — the irreducible human act; accept/amend carry both `proposed_by` (assistant) and `attested_by` (user); reject leaves the seat empty |
+| `fleet` | cross-project overseer view — where attention is owed across the user's projects (empty seats, staleness); producer-agnostic, navigation not a ranking |
+
+## Two surfaces, one server
+
+The same server runs in two places:
+
+- **Claude Code** — bundled by the plugin (`mcpServers` in `plugin.json`), so
+  installing the plugin auto-registers it; the six tools sit alongside the
+  plugin's skills + hooks. Confirm with `/mcp` or `claude plugin details
+  stillmirror-review` (`MCP servers (1)`).
+- **Claude Desktop** — packaged from the same `manifest.json` via `mcpb pack .`.
+
+Same code, same discipline, two entry points.
 
 ### Assisted attestation — draft, then ask in plain terms
 
