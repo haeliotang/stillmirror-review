@@ -1,0 +1,137 @@
+{
+  "cases": [
+    {
+      "allocation_ledger": {
+        "entries": 1,
+        "formation_chains": 0
+      },
+      "basis_change_impact": {
+        "branch_scoped_artifacts": [
+          "plugins/stillmirror-review/bin/stillmirror-review",
+          "tests/test_claude_plugin.py"
+        ],
+        "diff_missed_artifacts": [
+          "docs/BASIS-CHANGE-IMPACT.md"
+        ],
+        "formation_chains": 3,
+        "global_artifacts": [
+          "docs/BASIS-CHANGE-IMPACT.md",
+          "plugins/stillmirror-review/bin/stillmirror-review",
+          "tests/test_claude_plugin.py"
+        ]
+      },
+      "change_set": {
+        "agent_generated": true,
+        "base": "2420de78817d3da6dc36f9b4ecfb1aad1ecbbf1e",
+        "commit": "f5e9ce998194b8aad34c7a4dee438ca1a9b21a78",
+        "subject": "Bind attestations to review subjects"
+      },
+      "gate": {
+        "branch_scope_matches_changed_linked_files": true,
+        "finds_descendant_absent_from_diff": true,
+        "recovers_goal_claim_file_chain": true
+      },
+      "name": "subject-binding",
+      "ordinary_diff": {
+        "changed_files": [
+          "plugins/stillmirror-review/bin/stillmirror-review",
+          "tests/test_claude_plugin.py"
+        ],
+        "formation_chains": 0
+      }
+    },
+    {
+      "allocation_ledger": {
+        "entries": 1,
+        "formation_chains": 0
+      },
+      "basis_change_impact": {
+        "branch_scoped_artifacts": [
+          "plugins/stillmirror-review/bin/stillmirror-review",
+          "tests/test_claude_plugin.py"
+        ],
+        "diff_missed_artifacts": [
+          "docs/BASIS-CHANGE-IMPACT.md"
+        ],
+        "formation_chains": 3,
+        "global_artifacts": [
+          "docs/BASIS-CHANGE-IMPACT.md",
+          "plugins/stillmirror-review/bin/stillmirror-review",
+          "tests/test_claude_plugin.py"
+        ]
+      },
+      "change_set": {
+        "agent_generated": true,
+        "base": "f5e9ce998194b8aad34c7a4dee438ca1a9b21a78",
+        "commit": "e23bbc94b6f7ee4eef57b27116f5e89269abf88b",
+        "subject": "Record atomic formation receipts"
+      },
+      "gate": {
+        "branch_scope_matches_changed_linked_files": true,
+        "finds_descendant_absent_from_diff": true,
+        "recovers_goal_claim_file_chain": true
+      },
+      "name": "atomic-formation-receipts",
+      "ordinary_diff": {
+        "changed_files": [
+          "plugins/stillmirror-review/bin/stillmirror-review",
+          "tests/test_claude_plugin.py"
+        ],
+        "formation_chains": 0
+      }
+    },
+    {
+      "allocation_ledger": {
+        "entries": 1,
+        "formation_chains": 0
+      },
+      "basis_change_impact": {
+        "branch_scoped_artifacts": [
+          "plugins/stillmirror-review/bin/stillmirror-review",
+          "tests/test_claude_plugin.py"
+        ],
+        "diff_missed_artifacts": [
+          "docs/BASIS-CHANGE-IMPACT.md"
+        ],
+        "formation_chains": 3,
+        "global_artifacts": [
+          "docs/BASIS-CHANGE-IMPACT.md",
+          "plugins/stillmirror-review/bin/stillmirror-review",
+          "tests/test_claude_plugin.py"
+        ]
+      },
+      "change_set": {
+        "agent_generated": true,
+        "base": "e23bbc94b6f7ee4eef57b27116f5e89269abf88b",
+        "commit": "d33e4a7db9c35e1ca298629a90b7198350a7687f",
+        "subject": "Propagate basis changes to revalidation"
+      },
+      "gate": {
+        "branch_scope_matches_changed_linked_files": true,
+        "finds_descendant_absent_from_diff": true,
+        "recovers_goal_claim_file_chain": true
+      },
+      "name": "per-item-revalidation",
+      "ordinary_diff": {
+        "changed_files": [
+          "plugins/stillmirror-review/bin/stillmirror-review",
+          "tests/test_claude_plugin.py"
+        ],
+        "formation_chains": 0
+      }
+    }
+  ],
+  "gate": {
+    "all_case_gates_pass": true,
+    "case_count": 3,
+    "cases_with_diff_missed_descendant": 3,
+    "continue_product_validation": true
+  },
+  "limits": [
+    "Claims and goal changes were declared retrospectively for dogfood.",
+    "The author is the only reviewer; no external-person validity is claimed.",
+    "The cases validate mechanism and incremental information over diff/ledger, not market demand."
+  ],
+  "schema_version": 1,
+  "validation_scope": "Author-retrospective dogfood over three actual agent-generated milestone commits; this is not external-user or prospective-capture evidence."
+}

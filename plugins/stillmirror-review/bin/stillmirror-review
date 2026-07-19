@@ -1045,8 +1045,38 @@ def propagate_goal_invalidation(
     return event
 
 
-def impact_state(root: Path) -> dict[str, Any]:
-    events = list_invalidation_events(root)
+def branch_changed_files(root: Path, base_ref: str) -> set[str]:
+    try:
+        output = subprocess.run(
+            ["git", "-C", str(root), "diff", "--name-only", f"{base_ref}...HEAD", "--"],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        ).stdout
+    except Exception as exc:
+        raise SystemExit(f"could not scope impact to base {base_ref!r}: {exc}") from exc
+    return {line.strip() for line in output.splitlines() if line.strip()}
+
+
+def impact_state(root: Path, base_ref: str = "") -> dict[str, Any]:
+    raw_events = list_invalidation_events(root)
+    changed = branch_changed_files(root, base_ref) if base_ref else None
+    events: list[dict[str, Any]] = []
+    for raw_event in raw_events:
+        event = dict(raw_event)
+        raw_items = raw_event.get("items") if isinstance(raw_event.get("items"), list) else []
+        if changed is not None:
+            raw_items = [
+                item for item in raw_items
+                if isinstance(item, dict)
+                and str((item.get("artifact") or {}).get("path") or "") in changed
+            ]
+        event["items"] = raw_items
+        if changed is None or raw_items:
+            events.append(event)
     latest: dict[str, dict[str, Any]] = {}
     for record in list_impact_revalidations(root):
         impact_id = str(record.get("impact_id") or "")
@@ -1075,6 +1105,10 @@ def impact_state(root: Path) -> dict[str, Any]:
         "items": items,
         "needs_revalidation": needs_revalidation,
         "revalidated": len(items) - needs_revalidation,
+        "scope": {
+            "base": base_ref or None,
+            "changed_files": sorted(changed) if changed is not None else None,
+        },
         "coverage": {
             "edge_origin": "declared only",
             "not_captured": [
@@ -2066,6 +2100,7 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
     coverage = ledger.get("coverage") or {}
     reinforcement = ledger.get("goal_reinforcement") or {}
     accepted = goals.get("goals") if isinstance(goals, dict) else []
+    impact = impact_state(root, base_ref or "")
 
     lines = [
         "# StillMirror Project Alignment Review",
@@ -2256,6 +2291,60 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
         lines.extend(["", "Recent goal events:"])
         for event in goal_events[-5:]:
             lines.append(f"- {event.get('recorded_at', '')[:10]} `{event.get('type')}` — {event.get('statement')}")
+
+    lines.extend(
+        [
+            "",
+            "## Basis Change Impact",
+            "",
+            "Recorded goal → explicit claim → file chains whose goal basis changed.",
+            "This is stale basis state, not a correctness verdict.",
+            "",
+            f"- Needs revalidation: {impact.get('needs_revalidation', 0)}",
+            f"- Revalidated: {impact.get('revalidated', 0)}",
+        ]
+    )
+    if base_ref:
+        lines.append(f"- Branch scope: `{base_ref}...HEAD` ({len((impact.get('scope') or {}).get('changed_files') or [])} changed file(s))")
+    pending_impact = [
+        item for item in impact.get("items") or []
+        if item.get("status") == "needs_revalidation"
+    ]
+    if pending_impact:
+        lines.extend(["", "Needs revalidation:"])
+        for item in pending_impact:
+            artifact = item.get("artifact") or {}
+            claim = item.get("claim") or {}
+            lines.extend(
+                [
+                    f"- `{item.get('impact_id')}` — `{artifact.get('path')}`",
+                    f"  - changed goal: `{item.get('basis_goal_id')}` ({item.get('cause')})",
+                    f"  - declared claim: {claim.get('statement') or claim.get('claim_id')}",
+                    "  - edge origin: declared",
+                ]
+            )
+    else:
+        lines.extend(["", "- (no scoped file artifacts currently need revalidation)"])
+    revalidated_impact = [
+        item for item in impact.get("items") or []
+        if item.get("status") == "revalidated"
+    ]
+    if revalidated_impact:
+        lines.extend(["", "Revalidated:"])
+        for item in revalidated_impact:
+            artifact = item.get("artifact") or {}
+            attestation = item.get("revalidation") or {}
+            lines.append(
+                f"- `{artifact.get('path')}` — {item.get('decision')} by "
+                f"{attestation.get('attested_by') or 'unknown'}"
+            )
+    lines.extend(
+        [
+            "",
+            "Coverage: propagation follows explicit `declared` formation edges only.",
+            "Unrecorded dependencies and hidden reasoning remain outside this view.",
+        ]
+    )
 
     # Triage: where to spend scarce human attention across a flood of agent work.
     # Aggregate to navigate (clusters + surfaced exceptions), never to judge.
@@ -3063,6 +3152,7 @@ def main() -> int:
     impact_sub = impact.add_subparsers(dest="impact_command")
     impact_show = impact_sub.add_parser("show")
     impact_show.add_argument("--json", action="store_true", dest="as_json", help="machine-readable output")
+    impact_show.add_argument("--base", default="", help="scope to files changed in merge-base(<ref>, HEAD)..HEAD")
     impact_revalidate = impact_sub.add_parser("revalidate")
     impact_revalidate.add_argument("impact", help="impact item id or unique id fragment")
     impact_revalidate.add_argument("--decision", required=True, choices=["retained", "updated", "retired"])
@@ -3189,7 +3279,7 @@ def main() -> int:
             return 2
     elif args.command == "impact":
         if args.impact_command == "show":
-            state = impact_state(root)
+            state = impact_state(root, args.base)
             if args.as_json:
                 print(json.dumps(state, ensure_ascii=False, indent=2))
             else:

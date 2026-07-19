@@ -14,6 +14,8 @@ MCP = PLUGIN / "bin" / "stillmirror-mcp"
 ACTION_DIR = ROOT / ".github" / "actions" / "maintainer-review"
 PUBLISH_BADGE = ACTION_DIR / "publish-badge.sh"
 BASIS_IMPACT_FIXTURE = ROOT / "examples" / "basis-change-impact" / "fixture.json"
+DOGFOOD_RUNNER = ROOT / "examples" / "basis-change-impact" / "run_dogfood.py"
+DOGFOOD_RESULTS = ROOT / "examples" / "basis-change-impact" / "dogfood-results.json"
 
 
 class StillMirrorPluginTests(unittest.TestCase):
@@ -1286,6 +1288,95 @@ class StillMirrorPluginTests(unittest.TestCase):
                 )
             unchanged = json.loads(self.run_script(project, "impact", "show", "--json").stdout)
             self.assertEqual(unchanged["needs_revalidation"], 1)
+
+    def test_branch_review_scopes_and_surfaces_basis_change_impact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+
+            def git(*args: str) -> None:
+                subprocess.run(["git", "-C", str(project), *args], check=True, capture_output=True, text=True)
+
+            git("init")
+            git("config", "user.email", "t@t.co")
+            git("config", "user.name", "Hao")
+            (project / "one.py").write_text("one = 1\n")
+            (project / "two.py").write_text("two = 2\n")
+            git("add", "-A")
+            git("commit", "-m", "base")
+            git("branch", "-M", "main")
+            goal = json.loads(self.run_script(project, "goals", "add", "old session basis").stdout)["goal"]
+            self.run_script(
+                project,
+                "formation", "record",
+                "--claim", "Both files use the old session basis",
+                "--basis-goal", goal["id"],
+                "--artifact", "one.py",
+                "--artifact", "two.py",
+                "--declared-by", "fixture-agent",
+                "--tier", "agent",
+            )
+            git("checkout", "-b", "feature")
+            (project / "one.py").write_text("one = 10\n")
+            git("add", "one.py")
+            git("commit", "-m", "feat: update one")
+            self.run_script(project, "goals", "replace", goal["id"], "--with", "new session basis")
+
+            global_impact = json.loads(self.run_script(project, "impact", "show", "--json").stdout)
+            scoped_impact = json.loads(self.run_script(
+                project, "impact", "show", "--base", "main", "--json"
+            ).stdout)
+            self.assertEqual(global_impact["needs_revalidation"], 2)
+            self.assertEqual(scoped_impact["needs_revalidation"], 1)
+            self.assertEqual(scoped_impact["scope"]["base"], "main")
+            self.assertEqual(scoped_impact["scope"]["changed_files"], ["one.py"])
+
+            review_path = Path(json.loads(self.run_script(
+                project, "review", "--base", "main", "--since", "365d"
+            ).stdout)["output"])
+            text = review_path.read_text()
+            section = text.split("## Basis Change Impact", 1)[1].split("## Triage", 1)[0]
+            self.assertIn("one.py", section)
+            self.assertNotIn("two.py", section)
+            self.assertIn("Both files use the old session basis", section)
+            self.assertIn("edge origin: declared", section)
+            self.assertIn("Needs revalidation: 1", section)
+            self.assertNotIn("incorrect", section.casefold())
+
+    def test_dogfood_runner_reproduces_three_milestone_results(self) -> None:
+        actual = json.loads(subprocess.run(
+            ["python3", str(DOGFOOD_RUNNER)],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        ).stdout)
+        expected = json.loads(DOGFOOD_RESULTS.read_text(encoding="utf-8"))
+        self.assertEqual(actual, expected)
+        self.assertEqual(actual["gate"]["case_count"], 3)
+        self.assertEqual(actual["gate"]["cases_with_diff_missed_descendant"], 3)
+        self.assertTrue(actual["gate"]["all_case_gates_pass"])
+        self.assertTrue(actual["gate"]["continue_product_validation"])
+        self.assertIn("not external-user", actual["validation_scope"])
+
+    def test_v1_versions_and_basis_impact_docs_are_consistent(self) -> None:
+        plugin_manifest = json.loads(
+            (PLUGIN / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+        )
+        desktop_manifest = json.loads((PLUGIN / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(plugin_manifest["version"], "1.0.0")
+        self.assertEqual(desktop_manifest["version"], plugin_manifest["version"])
+        root_readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        plugin_readme = (PLUGIN / "README.md").read_text(encoding="utf-8")
+        acceptance = (ROOT / "docs" / "ACCEPTANCE.md").read_text(encoding="utf-8")
+        review_skill = (PLUGIN / "skills" / "review" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("stillmirror-review 1.0.0", root_readme)
+        for text in (root_readme, plugin_readme, acceptance, review_skill):
+            self.assertIn("formation record", text)
+            self.assertIn("needs_revalidation", text)
+            self.assertIn("impact revalidate", text)
+        self.assertIn("retrospective author", acceptance)
+        self.assertIn("does not clear pending impact items", review_skill)
 
     def test_abdication_is_visible_and_nudge_is_consumer_agnostic(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

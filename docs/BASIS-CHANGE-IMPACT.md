@@ -57,7 +57,9 @@ it cannot prove that every reason behind an artifact was captured.
 
 ## State objects
 
-The MVP adds three core object types under `.stillmirror/formation/`.
+The MVP adds three core object types under `.stillmirror/formation/`. A claim
+and all its edges are appended atomically as one line in `receipts.jsonl`, so a
+failed command cannot leave a half-written relationship.
 
 ### DecisionClaim
 
@@ -125,7 +127,7 @@ stillmirror-review goals replace G-17 \
 
 stillmirror-review impact show --base origin/main
 
-stillmirror-review impact revalidate IMP-8 \
+stillmirror-review impact revalidate impact-8 \
   --decision retained \
   --attested-by Hao
 ```
@@ -133,3 +135,12 @@ stillmirror-review impact revalidate IMP-8 \
 The exact generated IDs are implementation details. The chain and evidence
 classes are not.
 
+## Validation evidence
+
+`run_dogfood.py` replays three actual agent-generated milestone commits and
+compares ordinary diff, the allocation ledger, global impact, and branch-scoped
+impact. The frozen output in `dogfood-results.json` passes all case gates and
+finds one declared descendant absent from each ordinary diff.
+
+This is retrospective author dogfood. It is not prospective-capture evidence,
+external-person usability evidence, or market validation.

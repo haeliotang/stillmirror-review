@@ -14,7 +14,9 @@ terminus. It helps answer:
 
 - what problem seems to be driving the project;
 - where attention and agent work are actually allocated;
-- whether recent allocations still match the goals the user has reviewed or accepted.
+- whether recent allocations still match the goals the user has reviewed or accepted;
+- when an accepted goal changes, which explicitly linked decisions and files
+  need revalidation.
 
 It does not decide what the goal should be.
 
@@ -41,6 +43,11 @@ One loop, one story — **what you meant ⋈ what happened ⋈ who stood behind 
 - **Evidence of allocation** — hook capture → `ledger` → `review`: where agent
   work actually went, each entry carrying a receipt and honest coverage/blind
   spots.
+- **Basis Change Impact** — `formation record` binds an explicit decision claim
+  to an accepted goal and the files that use it. `goals replace/retire` then
+  propagates only across those declared edges and marks exact file items
+  `needs_revalidation`; `impact revalidate` records the named human decision for
+  one item without clearing the others. Stale basis is not a correctness verdict.
 - **The human act** — `correct` (fix a label) and the attestation. To keep that
   act cheap without forging it, an AI **drafts** it (`alignment propose
   --drafted-by`) and the human **ratifies** in plain terms (`alignment ratify
@@ -84,7 +91,7 @@ claude plugin details stillmirror-review
 Expected shape:
 
 ```text
-stillmirror-review 0.9.6
+stillmirror-review 1.0.0
   The review layer for agentic work. Joins accepted-goal provenance with
   allocation evidence for user alignment review.
   Source: stillmirror-review@stillmirror
@@ -154,6 +161,11 @@ plugins/stillmirror-review/bin/stillmirror-review focus --clear
 plugins/stillmirror-review/bin/stillmirror-review goals replace "Maintain hook reliability" --with "Ship a trustworthy review layer"
 plugins/stillmirror-review/bin/stillmirror-review goals retire "<goal id or statement>"
 plugins/stillmirror-review/bin/stillmirror-review goals events
+plugins/stillmirror-review/bin/stillmirror-review formation record --claim "Refresh-token rotation is required" --basis-goal "<goal>" --artifact src/auth/session.py --declared-by "claude-code" --tier agent
+plugins/stillmirror-review/bin/stillmirror-review formation list
+plugins/stillmirror-review/bin/stillmirror-review impact show
+plugins/stillmirror-review/bin/stillmirror-review impact show --base origin/main
+plugins/stillmirror-review/bin/stillmirror-review impact revalidate "<impact id>" --decision retained --attested-by "Your Name"
 plugins/stillmirror-review/bin/stillmirror-review ledger --since 30d
 plugins/stillmirror-review/bin/stillmirror-review correct --event <event_id> --label evaluation --attested-by "Your Name"
 plugins/stillmirror-review/bin/stillmirror-review review-due
@@ -214,6 +226,7 @@ StillMirror Review writes local project state under:
   goals/            accepted-goals.json, goal-events.jsonl, focus.jsonl
   allocations/      allocation-ledger.json, corrections.jsonl
   alignment/        alignment-reviews.jsonl
+  formation/        receipts.jsonl, invalidation-events.jsonl, revalidations.jsonl
   reviews/
 ```
 
@@ -248,7 +261,9 @@ Each `AllocationEntry` can use one or more labels:
 
 StillMirror Review does not output drift scores, productivity scores,
 objective-capture diagnoses, personality judgments, or recommendations about
-what your goals should be.
+what your goals should be. Formation receipts are explicit declarations, not
+observed chain-of-thought; content digests prove captured identity, not capture
+completeness.
 
 For the why — the convergent vision, the roadmap, and the principles (including
 the accountability floor and the no-human-in-the-loop reframe) — see
@@ -262,6 +277,7 @@ Validate the plugin and marketplace:
 claude plugin validate ./plugins/stillmirror-review --strict
 claude plugin validate ./.claude-plugin/marketplace.json --strict
 python3 -m unittest discover -s tests -v
+python3 examples/basis-change-impact/run_dogfood.py
 ```
 
 ## License
