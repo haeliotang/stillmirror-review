@@ -13,6 +13,7 @@ REVIEW = PLUGIN / "bin" / "stillmirror-review"
 MCP = PLUGIN / "bin" / "stillmirror-mcp"
 ACTION_DIR = ROOT / ".github" / "actions" / "maintainer-review"
 PUBLISH_BADGE = ACTION_DIR / "publish-badge.sh"
+BASIS_IMPACT_FIXTURE = ROOT / "examples" / "basis-change-impact" / "fixture.json"
 
 
 class StillMirrorPluginTests(unittest.TestCase):
@@ -26,6 +27,40 @@ class StillMirrorPluginTests(unittest.TestCase):
             text=True,
             encoding="utf-8",
         )
+
+    def test_basis_change_fixture_freezes_expected_impact(self) -> None:
+        fixture = json.loads(BASIS_IMPACT_FIXTURE.read_text(encoding="utf-8"))
+        goals = {goal["goal_id"]: goal for goal in fixture["goals"]}
+        claims = {claim["claim_id"]: claim for claim in fixture["claims"]}
+        support_edges = [edge for edge in fixture["basis_edges"] if edge["relation"] == "supports"]
+        artifact_edges = [edge for edge in fixture["basis_edges"] if edge["relation"] == "used_by"]
+
+        event = fixture["goal_event"]
+        self.assertEqual(goals[event["goal_id"]]["status"], "retired")
+        self.assertEqual(goals[event["superseded_by"]]["status"], "active")
+        self.assertEqual({edge["origin"] for edge in fixture["basis_edges"]}, {"declared"})
+
+        affected_claims = {
+            edge["claim_id"]
+            for edge in support_edges
+            if edge["basis_goal_id"] == event["goal_id"]
+        }
+        self.assertEqual(affected_claims, set(fixture["expected"]["affected_claim_ids"]))
+        self.assertTrue(affected_claims <= claims.keys())
+
+        affected_artifacts = {
+            edge["artifact"]["path"]
+            for edge in artifact_edges
+            if edge["claim_id"] in affected_claims
+        }
+        expected_affected = set(fixture["expected"]["affected_artifacts"])
+        expected_unaffected = set(fixture["expected"]["unaffected_artifacts"])
+        repository_files = set(fixture["repository_files"])
+        self.assertEqual(affected_artifacts, expected_affected)
+        self.assertEqual(expected_affected | expected_unaffected, repository_files)
+        self.assertFalse(expected_affected & expected_unaffected)
+        self.assertEqual(fixture["expected"]["status"], "needs_revalidation")
+        self.assertEqual(fixture["expected"]["incorrect_artifacts"], [])
 
     def test_init_creates_local_state_and_rubric(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

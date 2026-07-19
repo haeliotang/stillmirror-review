@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "sample_type": "basis_change_impact_conformance",
+  "privacy_boundary": "Synthetic fixture. No prompts, transcripts, local absolute paths, private excerpts, or raw tool payloads.",
+  "goals": [
+    {
+      "goal_id": "G-17",
+      "statement": "Support single-device sessions",
+      "review_state": "accepted",
+      "status": "retired",
+      "version_digest": "sha256:fixture-goal-g17"
+    },
+    {
+      "goal_id": "G-23",
+      "statement": "Support cross-device session restoration",
+      "review_state": "accepted",
+      "status": "active",
+      "version_digest": "sha256:fixture-goal-g23"
+    }
+  ],
+  "claims": [
+    {
+      "claim_id": "C-8",
+      "statement": "Session restoration assumes one active device",
+      "declared_by": {
+        "name": "fixture-agent",
+        "tier": "agent"
+      },
+      "status": "active"
+    }
+  ],
+  "basis_edges": [
+    {
+      "edge_id": "E-1",
+      "relation": "supports",
+      "origin": "declared",
+      "basis_goal_id": "G-17",
+      "basis_goal_digest": "sha256:fixture-goal-g17",
+      "claim_id": "C-8"
+    },
+    {
+      "edge_id": "E-2",
+      "relation": "used_by",
+      "origin": "declared",
+      "claim_id": "C-8",
+      "artifact": {
+        "path": "src/auth/session.py",
+        "content_digest": "sha256:fixture-session"
+      }
+    },
+    {
+      "edge_id": "E-3",
+      "relation": "used_by",
+      "origin": "declared",
+      "claim_id": "C-8",
+      "artifact": {
+        "path": "tests/test_session.py",
+        "content_digest": "sha256:fixture-test-session"
+      }
+    },
+    {
+      "edge_id": "E-4",
+      "relation": "used_by",
+      "origin": "declared",
+      "claim_id": "C-8",
+      "artifact": {
+        "path": "docs/session-restoration.md",
+        "content_digest": "sha256:fixture-session-doc"
+      }
+    }
+  ],
+  "goal_event": {
+    "type": "goal_replaced",
+    "goal_id": "G-17",
+    "superseded_by": "G-23"
+  },
+  "repository_files": [
+    "src/auth/session.py",
+    "src/auth/token.py",
+    "tests/test_session.py",
+    "docs/session-restoration.md"
+  ],
+  "expected": {
+    "status": "needs_revalidation",
+    "affected_claim_ids": [
+      "C-8"
+    ],
+    "affected_artifacts": [
+      "docs/session-restoration.md",
+      "src/auth/session.py",
+      "tests/test_session.py"
+    ],
+    "unaffected_artifacts": [
+      "src/auth/token.py"
+    ],
+    "incorrect_artifacts": []
+  }
+}
+
