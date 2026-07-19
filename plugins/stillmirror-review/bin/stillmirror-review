@@ -225,6 +225,7 @@ def init_project(root: Path, quiet: bool = False) -> None:
         "goals",
         "allocations",
         "alignment",
+        "formation",
         "reviews",
     ]:
         (base / name).mkdir(parents=True, exist_ok=True)
@@ -354,12 +355,17 @@ def review_subject(root: Path) -> dict[str, Any]:
         list_goal_events(root),
         key=lambda event: (str(event.get("recorded_at") or ""), str(event.get("event_id") or "")),
     )
+    formation = sorted(
+        list_formation_receipts(root),
+        key=lambda receipt: str(receipt.get("receipt_id") or ""),
+    )
     return {
         "canonicalization_version": SUBJECT_CANONICALIZATION_VERSION,
         "problem": problem if isinstance(problem, dict) else {},
         "goals": goals if isinstance(goals, dict) else {"schema_version": 1, "goals": []},
         "goal_events": events,
         "ledger": stable_ledger,
+        "formation": formation,
     }
 
 
@@ -718,6 +724,182 @@ def clear_focus(root: Path) -> dict[str, Any]:
 
 def list_goals(root: Path) -> dict[str, Any]:
     return load_accepted_goals(root)
+
+
+def formation_receipts_path(root: Path) -> Path:
+    return sm_dir(root) / "formation" / "receipts.jsonl"
+
+
+def list_formation_receipts(root: Path) -> list[dict[str, Any]]:
+    path = formation_receipts_path(root)
+    if not path.exists():
+        return []
+    receipts: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            receipts.append(value)
+    return receipts
+
+
+def file_content_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def git_head(root: Path) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+        return result.stdout.strip()
+    except Exception:
+        return ""
+
+
+def record_formation(
+    root: Path,
+    claim_statement: str,
+    basis_goal_ref: str,
+    artifact_paths: list[str],
+    declared_by: str,
+    tier: str,
+    request_id: str = "",
+) -> tuple[dict[str, Any], bool]:
+    """Atomically append one explicit claim with its goal and file edges.
+
+    All validation and digesting completes before the single JSONL append. The
+    receipt is a declaration by its named author, not observed hidden reasoning.
+    """
+    if not _is_git_repo(root):
+        raise SystemExit("formation record requires a Git repository")
+    statement = claim_statement.strip()
+    author = declared_by.strip()
+    if not statement:
+        raise SystemExit("--claim cannot be empty")
+    if not author:
+        raise SystemExit("--declared-by is required — name who declared this claim")
+    if tier not in ("human", "agent"):
+        raise SystemExit("--tier must be human or agent")
+    if not artifact_paths:
+        raise SystemExit("at least one --artifact is required")
+
+    goals = load_accepted_goals(root)
+    goal = resolve_goal(goals, basis_goal_ref)
+    if goal is None:
+        raise SystemExit(f"no unique accepted goal matched: {basis_goal_ref!r}")
+    if (
+        goal.get("retired")
+        or goal.get("superseded")
+        or goal.get("review_state") not in ("accepted", "reviewed")
+    ):
+        raise SystemExit(f"formation basis must be an active accepted goal: {basis_goal_ref!r}")
+
+    root_resolved = root.resolve()
+    head = git_head(root)
+    artifacts: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    for raw_path in artifact_paths:
+        candidate = Path(raw_path).expanduser()
+        resolved = candidate.resolve() if candidate.is_absolute() else (root_resolved / candidate).resolve()
+        try:
+            relative = resolved.relative_to(root_resolved)
+        except ValueError:
+            raise SystemExit(f"artifact must stay inside the repository: {raw_path!r}") from None
+        if not resolved.is_file():
+            raise SystemExit(f"artifact is not a file: {raw_path!r}")
+        relative_text = relative.as_posix()
+        if relative_text in seen_paths:
+            continue
+        seen_paths.add(relative_text)
+        artifacts.append(
+            {
+                "path": relative_text,
+                "content_digest": file_content_digest(resolved),
+                "head_commit": head,
+            }
+        )
+    artifacts.sort(key=lambda artifact: artifact["path"])
+
+    goal_id = str(goal.get("id") or "")
+    goal_digest = canonical_digest(goal)
+    identity = {
+        "claim": statement,
+        "basis_goal_id": goal_id,
+        "basis_goal_digest": goal_digest,
+        "artifacts": artifacts,
+        "declared_by": {"name": author, "tier": tier},
+    }
+    payload_digest = canonical_digest(identity)
+    existing = list_formation_receipts(root)
+    request_key = request_id.strip()
+    for receipt in existing:
+        same_request = bool(request_key) and receipt.get("request_id") == request_key
+        same_payload = not request_key and receipt.get("payload_digest") == payload_digest
+        if not same_request and not same_payload:
+            continue
+        if receipt.get("payload_digest") != payload_digest:
+            raise SystemExit(
+                f"formation request id {request_key!r} already exists with different content"
+            )
+        return receipt, False
+
+    claim_id = f"claim-{short_hash(canonical_digest({'statement': statement, 'goal_id': goal_id, 'author': author}))}"
+    claim = {
+        "claim_id": claim_id,
+        "statement": statement,
+        "declared_at": utc_now(),
+        "declared_by": {"name": author, "tier": tier},
+        "status": "active",
+    }
+    support_edge = {
+        "edge_id": f"edge-{short_hash(':'.join((goal_id, 'supports', claim_id, goal_digest)))}",
+        "relation": "supports",
+        "origin": "declared",
+        "basis_goal_id": goal_id,
+        "basis_goal_digest": goal_digest,
+        "claim_id": claim_id,
+    }
+    artifact_edges = [
+        {
+            "edge_id": f"edge-{short_hash(':'.join((claim_id, 'used_by', artifact['path'], artifact['content_digest'])))}",
+            "relation": "used_by",
+            "origin": "declared",
+            "claim_id": claim_id,
+            "artifact": artifact,
+        }
+        for artifact in artifacts
+    ]
+    receipt_seed = request_key or payload_digest
+    receipt = {
+        "schema_version": 1,
+        "receipt_id": f"formation-{short_hash(receipt_seed)}",
+        "recorded_at": utc_now(),
+        "request_id": request_key,
+        "payload_digest": payload_digest,
+        "claim": claim,
+        "edges": [support_edge, *artifact_edges],
+        "boundary": "Declared formation receipt; not observed chain-of-thought or proof of completeness.",
+    }
+    path = formation_receipts_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n")
+    return receipt, True
 
 
 ALIGNMENT_LABELS = {
@@ -2574,6 +2756,16 @@ def main() -> int:
     focus.add_argument("--note", default="")
     focus.add_argument("--clear", action="store_true", help="end the current focus (events after are undeclared)")
     focus.add_argument("--list", action="store_true", dest="list_focus")
+    formation = sub.add_parser("formation")
+    formation_sub = formation.add_subparsers(dest="formation_command")
+    formation_record = formation_sub.add_parser("record")
+    formation_record.add_argument("--claim", required=True, help="explicit decision claim; never hidden reasoning")
+    formation_record.add_argument("--basis-goal", required=True, help="existing active accepted goal reference")
+    formation_record.add_argument("--artifact", action="append", required=True, help="repository file that uses the claim (repeatable)")
+    formation_record.add_argument("--declared-by", required=True, help="named human or agent declaring the receipt")
+    formation_record.add_argument("--tier", default="agent", choices=["human", "agent"])
+    formation_record.add_argument("--request-id", default="", help="optional idempotency key")
+    formation_sub.add_parser("list")
     goals = sub.add_parser("goals")
     goals_sub = goals.add_subparsers(dest="goals_command")
     tier_help = "who is accountable for this intent (default human)"
@@ -2672,6 +2864,27 @@ def main() -> int:
         else:
             record = set_focus(root, args.ref, args.note)
             print(json.dumps({"focus": record, "output": str(focus_path(root))}, ensure_ascii=False, indent=2))
+    elif args.command == "formation":
+        if args.formation_command == "record":
+            receipt, created = record_formation(
+                root,
+                args.claim,
+                args.basis_goal,
+                args.artifact,
+                args.declared_by,
+                args.tier,
+                args.request_id,
+            )
+            print(json.dumps(
+                {"created": created, "receipt": receipt, "output": str(formation_receipts_path(root))},
+                ensure_ascii=False,
+                indent=2,
+            ))
+        elif args.formation_command == "list":
+            print(json.dumps({"receipts": list_formation_receipts(root)}, ensure_ascii=False, indent=2))
+        else:
+            formation.print_help()
+            return 2
     elif args.command == "goals":
         if args.goals_command == "add":
             goal = add_goal(root, args.statement, args.source, args.scope, args.review_state, args.attested_by, args.tier)

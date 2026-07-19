@@ -69,6 +69,7 @@ class StillMirrorPluginTests(unittest.TestCase):
             base = project / ".stillmirror"
             self.assertTrue((base / "traces" / "claude-code").is_dir())
             self.assertTrue((base / "goals" / "accepted-goals.json").is_file())
+            self.assertTrue((base / "formation").is_dir())
             rubric = json.loads((base / "allocations" / "rubric.json").read_text())
             self.assertEqual(
                 set(rubric["rubric"]),
@@ -992,6 +993,140 @@ class StillMirrorPluginTests(unittest.TestCase):
             regenerated = json.loads(self.run_script(project, "review-due", "--threshold", "999").stdout)
             self.assertFalse(regenerated["subject_stale"])
             self.assertEqual(regenerated["subject_digest"], record["subject_digest"])
+
+    def test_formation_record_is_atomic_and_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            subprocess.run(["git", "-C", str(project), "init"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(project), "config", "user.email", "t@t.co"], check=True)
+            subprocess.run(["git", "-C", str(project), "config", "user.name", "Hao"], check=True)
+            (project / "src").mkdir()
+            (project / "tests").mkdir()
+            (project / "src" / "session.py").write_text("DEVICE_LIMIT = 1\n")
+            (project / "tests" / "test_session.py").write_text("def test_limit(): pass\n")
+            subprocess.run(["git", "-C", str(project), "add", "-A"], check=True)
+            subprocess.run(["git", "-C", str(project), "commit", "-m", "fixture"], check=True, capture_output=True)
+            goal = json.loads(self.run_script(
+                project, "goals", "add", "support single-device sessions"
+            ).stdout)["goal"]
+
+            result = json.loads(self.run_script(
+                project,
+                "formation", "record",
+                "--claim", "Session restoration assumes one active device",
+                "--basis-goal", goal["id"],
+                "--artifact", "src/session.py",
+                "--artifact", "tests/test_session.py",
+                "--declared-by", "fixture-agent",
+                "--tier", "agent",
+                "--request-id", "request-1",
+            ).stdout)
+
+            self.assertTrue(result["created"])
+            receipt = result["receipt"]
+            self.assertEqual(receipt["claim"]["declared_by"], {"name": "fixture-agent", "tier": "agent"})
+            self.assertEqual(receipt["claim"]["status"], "active")
+            support = [edge for edge in receipt["edges"] if edge["relation"] == "supports"]
+            used_by = [edge for edge in receipt["edges"] if edge["relation"] == "used_by"]
+            self.assertEqual(len(support), 1)
+            self.assertEqual(len(used_by), 2)
+            self.assertEqual(support[0]["basis_goal_id"], goal["id"])
+            self.assertTrue(support[0]["basis_goal_digest"].startswith("sha256:"))
+            self.assertEqual({edge["origin"] for edge in receipt["edges"]}, {"declared"})
+            self.assertEqual(
+                {edge["artifact"]["path"] for edge in used_by},
+                {"src/session.py", "tests/test_session.py"},
+            )
+            for edge in used_by:
+                self.assertTrue(edge["artifact"]["content_digest"].startswith("sha256:"))
+                self.assertTrue(edge["artifact"]["head_commit"])
+            receipts = project / ".stillmirror" / "formation" / "receipts.jsonl"
+            self.assertEqual(len(receipts.read_text().splitlines()), 1)
+            self.assertNotIn(str(project), receipts.read_text())
+            listed = json.loads(self.run_script(project, "formation", "list").stdout)
+            self.assertEqual(listed["receipts"], [receipt])
+
+    def test_formation_record_rejects_invalid_basis_or_path_without_partial_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            project = base / "project"
+            project.mkdir()
+            subprocess.run(["git", "-C", str(project), "init"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(project), "config", "user.email", "t@t.co"], check=True)
+            subprocess.run(["git", "-C", str(project), "config", "user.name", "Hao"], check=True)
+            (project / "inside.py").write_text("inside = True\n")
+            outside = base / "outside.py"
+            outside.write_text("outside = True\n")
+            active = json.loads(self.run_script(project, "goals", "add", "active goal").stdout)["goal"]
+            retired = json.loads(self.run_script(project, "goals", "add", "retired goal").stdout)["goal"]
+            self.run_script(project, "goals", "retire", retired["id"])
+            proposed = json.loads(self.run_script(
+                project, "goals", "add", "agent proposal", "--tier", "autonomous"
+            ).stdout)["goal"]
+
+            cases = [
+                ("missing-goal", "inside.py"),
+                (active["id"], str(outside)),
+                (retired["id"], "inside.py"),
+                (proposed["id"], "inside.py"),
+            ]
+            for basis, artifact in cases:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    self.run_script(
+                        project,
+                        "formation", "record",
+                        "--claim", "invalid receipt",
+                        "--basis-goal", basis,
+                        "--artifact", artifact,
+                        "--declared-by", "fixture-agent",
+                        "--tier", "agent",
+                    )
+            receipts = project / ".stillmirror" / "formation" / "receipts.jsonl"
+            self.assertFalse(receipts.exists())
+
+    def test_formation_record_is_idempotent_and_stales_prior_attestation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            subprocess.run(["git", "-C", str(project), "init"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(project), "config", "user.email", "t@t.co"], check=True)
+            subprocess.run(["git", "-C", str(project), "config", "user.name", "Hao"], check=True)
+            (project / "session.py").write_text("DEVICE_LIMIT = 1\n")
+            goal = json.loads(self.run_script(project, "goals", "add", "single device").stdout)["goal"]
+            self.run_script(project, "ledger", "--since", "30d")
+            self.run_script(
+                project, "alignment", "record", "--label", "necessary_support", "--attested-by", "Hao"
+            )
+            args = (
+                "formation", "record",
+                "--claim", "One active device",
+                "--basis-goal", goal["id"],
+                "--artifact", "session.py",
+                "--declared-by", "fixture-agent",
+                "--tier", "agent",
+                "--request-id", "stable-request",
+            )
+            first = json.loads(self.run_script(project, *args).stdout)
+            second = json.loads(self.run_script(project, *args).stdout)
+            self.assertTrue(first["created"])
+            self.assertFalse(second["created"])
+            self.assertEqual(first["receipt"]["receipt_id"], second["receipt"]["receipt_id"])
+            receipts = project / ".stillmirror" / "formation" / "receipts.jsonl"
+            self.assertEqual(len(receipts.read_text().splitlines()), 1)
+            due = json.loads(self.run_script(project, "review-due", "--threshold", "999").stdout)
+            self.assertTrue(due["subject_stale"])
+
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.run_script(
+                    project,
+                    "formation", "record",
+                    "--claim", "A different assertion",
+                    "--basis-goal", goal["id"],
+                    "--artifact", "session.py",
+                    "--declared-by", "fixture-agent",
+                    "--tier", "agent",
+                    "--request-id", "stable-request",
+                )
+            self.assertEqual(len(receipts.read_text().splitlines()), 1)
 
     def test_abdication_is_visible_and_nudge_is_consumer_agnostic(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
