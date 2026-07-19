@@ -225,6 +225,7 @@ def init_project(root: Path, quiet: bool = False) -> None:
         "goals",
         "allocations",
         "alignment",
+        "formation",
         "reviews",
     ]:
         (base / name).mkdir(parents=True, exist_ok=True)
@@ -296,6 +297,94 @@ def write_json(path: Path, value: Any) -> None:
 
 def short_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:12]
+
+
+SUBJECT_CANONICALIZATION_VERSION = 1
+
+
+def canonical_digest(value: Any) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+def review_subject(root: Path) -> dict[str, Any]:
+    """Stable content a named alignment attestation actually stands behind.
+
+    Volatile generation timestamps and relative-window timestamps are excluded;
+    goal/problem state, goal events, and ledger content are included. A digest
+    proves captured content identity, never that capture was complete.
+    """
+    problem = load_json(sm_dir(root) / "problems" / "mainline-hypothesis.json", {})
+    goals = load_json(accepted_goals_path(root), {"schema_version": 1, "goals": []})
+    if isinstance(goals, dict):
+        goals = dict(goals)
+        goal_rows = goals.get("goals") if isinstance(goals.get("goals"), list) else []
+        goals["goals"] = sorted(
+            goal_rows,
+            key=lambda goal: (str(goal.get("id") or ""), str(goal.get("statement") or "")),
+        )
+    ledger = load_json(sm_dir(root) / "allocations" / "allocation-ledger.json", {})
+    stable_ledger: dict[str, Any] = {}
+    if isinstance(ledger, dict):
+        for key in (
+            "schema_version",
+            "rubric",
+            "entry_count",
+            "allocation_counts",
+            "coverage",
+            "goal_reinforcement",
+            "entries",
+        ):
+            if key in ledger:
+                stable_ledger[key] = ledger[key]
+        if isinstance(stable_ledger.get("entries"), list):
+            stable_ledger["entries"] = sorted(
+                stable_ledger["entries"],
+                key=lambda entry: (
+                    str(entry.get("event_id") or ""),
+                    str(entry.get("timestamp") or ""),
+                    str(entry.get("source") or ""),
+                ),
+            )
+    events = sorted(
+        list_goal_events(root),
+        key=lambda event: (str(event.get("recorded_at") or ""), str(event.get("event_id") or "")),
+    )
+    formation = {
+        "receipts": sorted(
+            list_formation_receipts(root),
+            key=lambda receipt: str(receipt.get("receipt_id") or ""),
+        ),
+        "invalidations": sorted(
+            list_invalidation_events(root),
+            key=lambda event: str(event.get("event_id") or ""),
+        ),
+        "revalidations": sorted(
+            list_impact_revalidations(root),
+            key=lambda record: (str(record.get("impact_id") or ""), str(record.get("recorded_at") or "")),
+        ),
+    }
+    return {
+        "canonicalization_version": SUBJECT_CANONICALIZATION_VERSION,
+        "problem": problem if isinstance(problem, dict) else {},
+        "goals": goals if isinstance(goals, dict) else {"schema_version": 1, "goals": []},
+        "goal_events": events,
+        "ledger": stable_ledger,
+        "formation": formation,
+    }
+
+
+def review_subject_identity(root: Path) -> dict[str, Any]:
+    subject = review_subject(root)
+    return {
+        "canonicalization_version": SUBJECT_CANONICALIZATION_VERSION,
+        "subject_digest": canonical_digest(subject),
+    }
 
 
 def slug(text: str) -> str:
@@ -506,10 +595,13 @@ def retire_goal(root: Path, ref: str, note: str = "") -> dict[str, Any]:
     goal = resolve_goal(doc, ref)
     if goal is None:
         raise SystemExit(f"no unique goal matched: {ref!r}")
+    if goal.get("retired"):
+        return goal
     goal["retired"] = True
     goal["updated_at"] = utc_now()
     write_json(accepted_goals_path(root), doc)
-    append_goal_event(root, "goal_retired", str(goal.get("id") or ""), str(goal.get("statement") or ""), note=note)
+    event = append_goal_event(root, "goal_retired", str(goal.get("id") or ""), str(goal.get("statement") or ""), note=note)
+    propagate_goal_invalidation(root, str(goal.get("id") or ""), "goal_retired", "", event)
     return goal
 
 
@@ -535,6 +627,16 @@ def replace_goal(
         raise SystemExit(f"no unique goal matched: {ref!r}")
     old_id = str(old.get("id") or "")
     new_id = f"goal-{slug(new_statement)}-{short_hash(new_statement)}"
+    if old.get("superseded"):
+        if old.get("superseded_by") == new_id:
+            existing = resolve_goal(doc, new_id)
+            if existing is None:
+                raise SystemExit(f"superseding goal is missing: {new_id!r}")
+            return {"old": old, "new": existing}
+        raise SystemExit(
+            f"goal is already superseded by {old.get('superseded_by')!r}; "
+            "replace the current goal instead"
+        )
     now = utc_now()
     new_goal = {
         "id": new_id,
@@ -559,7 +661,8 @@ def replace_goal(
     old["superseded_by"] = new_id
     old["updated_at"] = now
     write_json(accepted_goals_path(root), doc)
-    append_goal_event(root, "goal_replaced", new_id, saved_new["statement"], source=source, note=note, supersedes=old_id)
+    event = append_goal_event(root, "goal_replaced", new_id, saved_new["statement"], source=source, note=note, supersedes=old_id)
+    propagate_goal_invalidation(root, old_id, "goal_replaced", new_id, event)
     return {"old": old, "new": saved_new}
 
 
@@ -623,13 +726,18 @@ def set_problem(
 
 
 def set_focus(root: Path, ref: str, note: str = "") -> dict[str, Any]:
-    """Declare the current work's intent. Resolves an accepted goal, or adds it."""
+    """Declare current intent against an existing, authorized goal."""
     if not ref.strip():
-        raise SystemExit("focus needs a goal reference or statement")
+        raise SystemExit("focus needs an existing accepted goal reference")
     doc = load_accepted_goals(root)
     goal = resolve_goal(doc, ref)
     if goal is None:
-        goal = add_goal(root, ref, "user", "project", "accepted")
+        raise SystemExit(
+            f"no unique accepted goal matched: {ref!r}; add or accept the goal "
+            "explicitly before declaring focus"
+        )
+    if goal.get("retired") or goal.get("superseded") or goal.get("review_state") == "proposed":
+        raise SystemExit(f"focus requires an active accepted goal: {ref!r}")
     return append_focus(root, str(goal.get("id") or ""), str(goal.get("statement") or ref.strip()), note)
 
 
@@ -640,6 +748,485 @@ def clear_focus(root: Path) -> dict[str, Any]:
 
 def list_goals(root: Path) -> dict[str, Any]:
     return load_accepted_goals(root)
+
+
+def formation_receipts_path(root: Path) -> Path:
+    return sm_dir(root) / "formation" / "receipts.jsonl"
+
+
+def list_formation_receipts(root: Path) -> list[dict[str, Any]]:
+    path = formation_receipts_path(root)
+    if not path.exists():
+        return []
+    receipts: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            receipts.append(value)
+    return receipts
+
+
+def file_content_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def git_head(root: Path) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+        return result.stdout.strip()
+    except Exception:
+        return ""
+
+
+def record_formation(
+    root: Path,
+    claim_statement: str,
+    basis_goal_ref: str,
+    artifact_paths: list[str],
+    declared_by: str,
+    tier: str,
+    request_id: str = "",
+) -> tuple[dict[str, Any], bool]:
+    """Atomically append one explicit claim with its goal and file edges.
+
+    All validation and digesting completes before the single JSONL append. The
+    receipt is a declaration by its named author, not observed hidden reasoning.
+    """
+    if not _is_git_repo(root):
+        raise SystemExit("formation record requires a Git repository")
+    statement = claim_statement.strip()
+    author = declared_by.strip()
+    if not statement:
+        raise SystemExit("--claim cannot be empty")
+    if not author:
+        raise SystemExit("--declared-by is required — name who declared this claim")
+    if tier not in ("human", "agent"):
+        raise SystemExit("--tier must be human or agent")
+    if not artifact_paths:
+        raise SystemExit("at least one --artifact is required")
+
+    goals = load_accepted_goals(root)
+    goal = resolve_goal(goals, basis_goal_ref)
+    if goal is None:
+        raise SystemExit(f"no unique accepted goal matched: {basis_goal_ref!r}")
+    if (
+        goal.get("retired")
+        or goal.get("superseded")
+        or goal.get("review_state") not in ("accepted", "reviewed")
+    ):
+        raise SystemExit(f"formation basis must be an active accepted goal: {basis_goal_ref!r}")
+
+    root_resolved = root.resolve()
+    head = git_head(root)
+    artifacts: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    for raw_path in artifact_paths:
+        candidate = Path(raw_path).expanduser()
+        resolved = candidate.resolve() if candidate.is_absolute() else (root_resolved / candidate).resolve()
+        try:
+            relative = resolved.relative_to(root_resolved)
+        except ValueError:
+            raise SystemExit(f"artifact must stay inside the repository: {raw_path!r}") from None
+        if not resolved.is_file():
+            raise SystemExit(f"artifact is not a file: {raw_path!r}")
+        relative_text = relative.as_posix()
+        if relative_text in seen_paths:
+            continue
+        seen_paths.add(relative_text)
+        artifacts.append(
+            {
+                "path": relative_text,
+                "content_digest": file_content_digest(resolved),
+                "head_commit": head,
+            }
+        )
+    artifacts.sort(key=lambda artifact: artifact["path"])
+
+    goal_id = str(goal.get("id") or "")
+    goal_digest = canonical_digest(goal)
+    identity = {
+        "claim": statement,
+        "basis_goal_id": goal_id,
+        "basis_goal_digest": goal_digest,
+        "artifacts": artifacts,
+        "declared_by": {"name": author, "tier": tier},
+    }
+    payload_digest = canonical_digest(identity)
+    existing = list_formation_receipts(root)
+    request_key = request_id.strip()
+    for receipt in existing:
+        same_request = bool(request_key) and receipt.get("request_id") == request_key
+        same_payload = not request_key and receipt.get("payload_digest") == payload_digest
+        if not same_request and not same_payload:
+            continue
+        if receipt.get("payload_digest") != payload_digest:
+            raise SystemExit(
+                f"formation request id {request_key!r} already exists with different content"
+            )
+        return receipt, False
+
+    claim_id = f"claim-{short_hash(canonical_digest({'statement': statement, 'goal_id': goal_id, 'author': author}))}"
+    claim = {
+        "claim_id": claim_id,
+        "statement": statement,
+        "declared_at": utc_now(),
+        "declared_by": {"name": author, "tier": tier},
+        "status": "active",
+    }
+    support_edge = {
+        "edge_id": f"edge-{short_hash(':'.join((goal_id, 'supports', claim_id, goal_digest)))}",
+        "relation": "supports",
+        "origin": "declared",
+        "basis_goal_id": goal_id,
+        "basis_goal_digest": goal_digest,
+        "claim_id": claim_id,
+    }
+    artifact_edges = [
+        {
+            "edge_id": f"edge-{short_hash(':'.join((claim_id, 'used_by', artifact['path'], artifact['content_digest'])))}",
+            "relation": "used_by",
+            "origin": "declared",
+            "claim_id": claim_id,
+            "artifact": artifact,
+        }
+        for artifact in artifacts
+    ]
+    receipt_seed = request_key or payload_digest
+    receipt = {
+        "schema_version": 1,
+        "receipt_id": f"formation-{short_hash(receipt_seed)}",
+        "recorded_at": utc_now(),
+        "request_id": request_key,
+        "payload_digest": payload_digest,
+        "claim": claim,
+        "edges": [support_edge, *artifact_edges],
+        "boundary": "Declared formation receipt; not observed chain-of-thought or proof of completeness.",
+    }
+    path = formation_receipts_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n")
+    return receipt, True
+
+
+def invalidation_events_path(root: Path) -> Path:
+    return sm_dir(root) / "formation" / "invalidation-events.jsonl"
+
+
+def impact_revalidations_path(root: Path) -> Path:
+    return sm_dir(root) / "formation" / "revalidations.jsonl"
+
+
+def list_invalidation_events(root: Path) -> list[dict[str, Any]]:
+    path = invalidation_events_path(root)
+    if not path.exists():
+        return []
+    events: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            events.append(value)
+    return events
+
+
+def list_impact_revalidations(root: Path) -> list[dict[str, Any]]:
+    path = impact_revalidations_path(root)
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            records.append(value)
+    return records
+
+
+def propagate_goal_invalidation(
+    root: Path,
+    old_goal_id: str,
+    cause: str,
+    new_goal_id: str,
+    goal_event: dict[str, Any],
+) -> dict[str, Any]:
+    """Snapshot descendants of a changed goal over explicit declared edges."""
+    goal_event_id = str(goal_event.get("event_id") or "")
+    for event in list_invalidation_events(root):
+        if event.get("goal_event_id") == goal_event_id:
+            return event
+
+    claims: dict[str, dict[str, Any]] = {}
+    support_edges: dict[str, dict[str, Any]] = {}
+    artifact_edges: list[tuple[str, dict[str, Any], str]] = []
+    for receipt in list_formation_receipts(root):
+        claim = receipt.get("claim") if isinstance(receipt.get("claim"), dict) else {}
+        claim_id = str(claim.get("claim_id") or "")
+        if not claim_id:
+            continue
+        claims[claim_id] = claim
+        edges = receipt.get("edges") if isinstance(receipt.get("edges"), list) else []
+        for edge in edges:
+            if not isinstance(edge, dict) or edge.get("origin") != "declared":
+                continue
+            if edge.get("relation") == "supports" and edge.get("basis_goal_id") == old_goal_id:
+                support_edges[claim_id] = edge
+            elif edge.get("relation") == "used_by":
+                artifact_edges.append((claim_id, edge, str(receipt.get("receipt_id") or "")))
+
+    items: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for claim_id, edge, receipt_id in artifact_edges:
+        support = support_edges.get(claim_id)
+        artifact = edge.get("artifact") if isinstance(edge.get("artifact"), dict) else {}
+        path = str(artifact.get("path") or "")
+        digest = str(artifact.get("content_digest") or "")
+        key = (claim_id, path, digest)
+        if support is None or not path or key in seen:
+            continue
+        seen.add(key)
+        impact_id = f"impact-{short_hash(':'.join((goal_event_id, claim_id, path, digest)))}"
+        items.append(
+            {
+                "impact_id": impact_id,
+                "status": "needs_revalidation",
+                "origin": "declared",
+                "claim": claims.get(claim_id) or {"claim_id": claim_id},
+                "artifact": artifact,
+                "basis_goal_id": old_goal_id,
+                "basis_goal_digest": support.get("basis_goal_digest"),
+                "support_edge_id": support.get("edge_id"),
+                "artifact_edge_id": edge.get("edge_id"),
+                "formation_receipt_id": receipt_id,
+            }
+        )
+    items.sort(key=lambda item: (str(item["artifact"].get("path") or ""), str(item["impact_id"])))
+    event = {
+        "schema_version": 1,
+        "event_id": f"invalidation-{short_hash(goal_event_id or canonical_digest(goal_event))}",
+        "recorded_at": utc_now(),
+        "cause": cause,
+        "goal_event_id": goal_event_id,
+        "old_goal_id": old_goal_id,
+        "new_goal_id": new_goal_id,
+        "affected_claim_ids": sorted(support_edges),
+        "items": items,
+        "boundary": "Changed recorded basis; needs_revalidation is not a correctness verdict.",
+    }
+    path = invalidation_events_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+    return event
+
+
+def branch_changed_files(root: Path, base_ref: str) -> set[str]:
+    try:
+        output = subprocess.run(
+            ["git", "-C", str(root), "diff", "--name-only", f"{base_ref}...HEAD", "--"],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        ).stdout
+    except Exception as exc:
+        raise SystemExit(f"could not scope impact to base {base_ref!r}: {exc}") from exc
+    return {line.strip() for line in output.splitlines() if line.strip()}
+
+
+def impact_state(root: Path, base_ref: str = "") -> dict[str, Any]:
+    raw_events = list_invalidation_events(root)
+    changed = branch_changed_files(root, base_ref) if base_ref else None
+    events: list[dict[str, Any]] = []
+    for raw_event in raw_events:
+        event = dict(raw_event)
+        raw_items = raw_event.get("items") if isinstance(raw_event.get("items"), list) else []
+        if changed is not None:
+            raw_items = [
+                item for item in raw_items
+                if isinstance(item, dict)
+                and str((item.get("artifact") or {}).get("path") or "") in changed
+            ]
+        event["items"] = raw_items
+        if changed is None or raw_items:
+            events.append(event)
+    latest: dict[str, dict[str, Any]] = {}
+    for record in list_impact_revalidations(root):
+        impact_id = str(record.get("impact_id") or "")
+        if impact_id:
+            latest[impact_id] = record
+    items: list[dict[str, Any]] = []
+    for event in events:
+        for raw_item in event.get("items") or []:
+            if not isinstance(raw_item, dict):
+                continue
+            item = dict(raw_item)
+            item["invalidation_event_id"] = event.get("event_id")
+            item["cause"] = event.get("cause")
+            item["new_goal_id"] = event.get("new_goal_id")
+            revalidation = latest.get(str(item.get("impact_id") or ""))
+            if revalidation:
+                item["status"] = "revalidated"
+                item["decision"] = revalidation.get("decision")
+                item["revalidation"] = revalidation
+            items.append(item)
+    items.sort(key=lambda item: (str(item.get("status") or ""), str((item.get("artifact") or {}).get("path") or "")))
+    needs_revalidation = sum(1 for item in items if item.get("status") == "needs_revalidation")
+    return {
+        "schema_version": 1,
+        "events": events,
+        "items": items,
+        "needs_revalidation": needs_revalidation,
+        "revalidated": len(items) - needs_revalidation,
+        "scope": {
+            "base": base_ref or None,
+            "changed_files": sorted(changed) if changed is not None else None,
+        },
+        "coverage": {
+            "edge_origin": "declared only",
+            "not_captured": [
+                "Dependencies that were not explicitly recorded in a formation receipt.",
+                "Hidden reasoning or evidence that never crossed a decision boundary.",
+            ],
+        },
+        "boundary": "A stale recorded basis needs revalidation; this state is not a correctness verdict.",
+    }
+
+
+def resolve_impact_item(root: Path, ref: str) -> dict[str, Any] | None:
+    items = [item for event in list_invalidation_events(root) for item in (event.get("items") or [])]
+    exact = [item for item in items if item.get("impact_id") == ref]
+    if len(exact) == 1:
+        return exact[0]
+    partial = [item for item in items if ref and ref in str(item.get("impact_id") or "")]
+    return partial[0] if len(partial) == 1 else None
+
+
+def record_impact_revalidation(
+    root: Path,
+    impact_ref: str,
+    decision: str,
+    attested_by: str,
+    note: str = "",
+) -> dict[str, Any]:
+    if not attested_by.strip():
+        raise SystemExit("--attested-by is required — name the human revalidating this impact item")
+    if decision not in ("retained", "updated", "retired"):
+        raise SystemExit("--decision must be retained, updated, or retired")
+    item = resolve_impact_item(root, impact_ref)
+    if item is None:
+        raise SystemExit(f"no unique impact item matched: {impact_ref!r}")
+    artifact = item.get("artifact") if isinstance(item.get("artifact"), dict) else {}
+    artifact_path = str(artifact.get("path") or "")
+    current_digest = None
+    current = (root.resolve() / artifact_path).resolve()
+    if decision in ("retained", "updated"):
+        try:
+            current.relative_to(root.resolve())
+        except ValueError:
+            raise SystemExit(f"impact artifact escaped the repository: {artifact_path!r}") from None
+        if not current.is_file():
+            raise SystemExit(
+                f"artifact must exist for a {decision} decision: {artifact_path!r}; "
+                "use retired when it was removed"
+            )
+        current_digest = file_content_digest(current)
+    record = {
+        "schema_version": 1,
+        "record_id": f"revalidation-{short_hash(':'.join((str(item.get('impact_id') or ''), utc_now(), decision, attested_by.strip())))}",
+        "recorded_at": utc_now(),
+        "impact_id": item.get("impact_id"),
+        "artifact_path": artifact_path,
+        "decision": decision,
+        "note": note,
+        "attested_by": attested_by.strip(),
+        "human_attested": True,
+        "current_content_digest": current_digest,
+        "boundary": "Named item-level revalidation; it does not clear any other impact item.",
+    }
+    path = impact_revalidations_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    return record
+
+
+def render_impact(state: dict[str, Any]) -> str:
+    lines = [
+        "# StillMirror Basis Change Impact",
+        "",
+        f"- Basis-change events: {len(state.get('events') or [])}",
+        f"- Needs revalidation: {state.get('needs_revalidation', 0)}",
+        f"- Revalidated: {state.get('revalidated', 0)}",
+        "",
+        "This is recorded basis state, not a correctness verdict.",
+        "",
+        "## Needs revalidation",
+        "",
+    ]
+    pending = [item for item in state.get("items") or [] if item.get("status") == "needs_revalidation"]
+    if not pending:
+        lines.append("- (none)")
+    for item in pending:
+        artifact = item.get("artifact") or {}
+        claim = item.get("claim") or {}
+        lines.extend(
+            [
+                f"- `{item.get('impact_id')}` — `{artifact.get('path')}`",
+                f"  - changed goal: `{item.get('basis_goal_id')}` ({item.get('cause')})",
+                f"  - declared claim: {claim.get('statement') or claim.get('claim_id')}",
+                "  - edge origin: declared",
+            ]
+        )
+    revalidated = [item for item in state.get("items") or [] if item.get("status") == "revalidated"]
+    lines.extend(["", "## Revalidated", ""])
+    if not revalidated:
+        lines.append("- (none)")
+    for item in revalidated:
+        artifact = item.get("artifact") or {}
+        record = item.get("revalidation") or {}
+        lines.append(
+            f"- `{artifact.get('path')}` — {item.get('decision')} by "
+            f"{record.get('attested_by') or 'unknown'}"
+        )
+    lines.extend(
+        [
+            "",
+            "## Coverage",
+            "",
+            "- Propagation follows explicit declared formation edges only.",
+            "- Unrecorded dependencies remain outside this view.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
 
 
 ALIGNMENT_LABELS = {
@@ -735,6 +1322,7 @@ def _write_alignment(
     init_project(root, quiet=True)
     _validate_labels(labels)
     ledger = load_json(sm_dir(root) / "allocations" / "allocation-ledger.json", {})
+    subject = review_subject_identity(root)
     record = {
         "schema_version": 1,
         "recorded_at": utc_now(),
@@ -745,6 +1333,7 @@ def _write_alignment(
         "human_attested": True,
         "ledger_generated_at": ledger.get("generated_at") if isinstance(ledger, dict) else None,
         "ledger_entry_count": ledger.get("entry_count") if isinstance(ledger, dict) else None,
+        **subject,
     }
     if extra:
         record.update(extra)
@@ -823,6 +1412,7 @@ def append_proposal(root: Path, labels: list[str], note: str, drafted_by: str, r
             "assistant); a draft is not an attestation"
         )
     ledger = load_json(sm_dir(root) / "allocations" / "allocation-ledger.json", {})
+    subject = review_subject_identity(root)
     proposal = {
         "schema_version": 1,
         "proposed_at": utc_now(),
@@ -834,6 +1424,7 @@ def append_proposal(root: Path, labels: list[str], note: str, drafted_by: str, r
         "review_file": _review_ref(root, review_file),
         "ledger_generated_at": ledger.get("generated_at") if isinstance(ledger, dict) else None,
         "ledger_entry_count": ledger.get("entry_count") if isinstance(ledger, dict) else None,
+        **subject,
     }
     proposal["proposal_id"] = short_hash(json.dumps(proposal, sort_keys=True, ensure_ascii=False))
     path = proposals_path(root)
@@ -1166,7 +1757,8 @@ def compute_review_due(root: Path, threshold: int) -> dict[str, Any]:
     and the last alignment record.
     """
     init_project(root, quiet=True)
-    reference = last_reviewed_at(root)
+    last = last_attestation(root)
+    reference = parse_time(last.get("recorded_at")) if last else None
     epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
     events = load_trace_events(root, reference or epoch)
     new_allocations = [
@@ -1191,7 +1783,19 @@ def compute_review_due(root: Path, threshold: int) -> dict[str, Any]:
             event for event in goal_events
             if (parse_time(event.get("recorded_at")) or epoch) > reference
         ]
-    due = len(new_allocations) >= threshold or len(goal_events) > 0
+    subject = review_subject_identity(root)
+    last_subject_digest = str(last.get("subject_digest") or "") if last else ""
+    if last is None:
+        subject_binding = "none"
+    elif last_subject_digest:
+        subject_binding = "bound"
+    else:
+        subject_binding = "legacy_unbound"
+    subject_stale = bool(
+        last_subject_digest
+        and last_subject_digest != subject["subject_digest"]
+    )
+    due = len(new_allocations) >= threshold or len(goal_events) > 0 or subject_stale
     # A drafted-but-unratified attestation: the seat has a draft in it but is
     # still empty (a draft is not an attestation) until a human ratifies.
     pending_proposal = latest_pending_proposal(root) is not None
@@ -1203,6 +1807,11 @@ def compute_review_due(root: Path, threshold: int) -> dict[str, Any]:
         # finding, not a default — surfaced for any consumer, human or automation.
         "ever_attested": reference is not None,
         "pending_proposal": pending_proposal,
+        "canonicalization_version": SUBJECT_CANONICALIZATION_VERSION,
+        "subject_digest": subject["subject_digest"],
+        "last_subject_digest": last_subject_digest or None,
+        "subject_binding": subject_binding,
+        "subject_stale": subject_stale,
         "new_allocations": len(new_allocations),
         "new_goal_events": len(goal_events),
         "sessions_touched": len(sessions),
@@ -1491,6 +2100,7 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
     coverage = ledger.get("coverage") or {}
     reinforcement = ledger.get("goal_reinforcement") or {}
     accepted = goals.get("goals") if isinstance(goals, dict) else []
+    impact = impact_state(root, base_ref or "")
 
     lines = [
         "# StillMirror Project Alignment Review",
@@ -1555,6 +2165,16 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
             f"- Distinct subagents since: {debt.get('agents_touched', 0)}",
         ]
     )
+    if debt.get("subject_stale"):
+        lines.extend(
+            [
+                "",
+                "> **The last attestation is stale.** Its recorded subject digest no longer "
+                "matches the current goals, goal history, problem, or allocation ledger. "
+                "This proves the captured review basis changed; it does not prove which "
+                "current conclusion is wrong.",
+            ]
+        )
     # Make abdication visible: an empty judgment seat is the finding, not a default.
     if last_att is None and debt["new_allocations"] > 0:
         lines.extend(
@@ -1671,6 +2291,60 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
         lines.extend(["", "Recent goal events:"])
         for event in goal_events[-5:]:
             lines.append(f"- {event.get('recorded_at', '')[:10]} `{event.get('type')}` — {event.get('statement')}")
+
+    lines.extend(
+        [
+            "",
+            "## Basis Change Impact",
+            "",
+            "Recorded goal → explicit claim → file chains whose goal basis changed.",
+            "This is stale basis state, not a correctness verdict.",
+            "",
+            f"- Needs revalidation: {impact.get('needs_revalidation', 0)}",
+            f"- Revalidated: {impact.get('revalidated', 0)}",
+        ]
+    )
+    if base_ref:
+        lines.append(f"- Branch scope: `{base_ref}...HEAD` ({len((impact.get('scope') or {}).get('changed_files') or [])} changed file(s))")
+    pending_impact = [
+        item for item in impact.get("items") or []
+        if item.get("status") == "needs_revalidation"
+    ]
+    if pending_impact:
+        lines.extend(["", "Needs revalidation:"])
+        for item in pending_impact:
+            artifact = item.get("artifact") or {}
+            claim = item.get("claim") or {}
+            lines.extend(
+                [
+                    f"- `{item.get('impact_id')}` — `{artifact.get('path')}`",
+                    f"  - changed goal: `{item.get('basis_goal_id')}` ({item.get('cause')})",
+                    f"  - declared claim: {claim.get('statement') or claim.get('claim_id')}",
+                    "  - edge origin: declared",
+                ]
+            )
+    else:
+        lines.extend(["", "- (no scoped file artifacts currently need revalidation)"])
+    revalidated_impact = [
+        item for item in impact.get("items") or []
+        if item.get("status") == "revalidated"
+    ]
+    if revalidated_impact:
+        lines.extend(["", "Revalidated:"])
+        for item in revalidated_impact:
+            artifact = item.get("artifact") or {}
+            attestation = item.get("revalidation") or {}
+            lines.append(
+                f"- `{artifact.get('path')}` — {item.get('decision')} by "
+                f"{attestation.get('attested_by') or 'unknown'}"
+            )
+    lines.extend(
+        [
+            "",
+            "Coverage: propagation follows explicit `declared` formation edges only.",
+            "Unrecorded dependencies and hidden reasoning remain outside this view.",
+        ]
+    )
 
     # Triage: where to spend scarce human attention across a flood of agent work.
     # Aggregate to navigate (clusters + surfaced exceptions), never to judge.
@@ -2460,10 +3134,30 @@ def main() -> int:
     fleet.add_argument("--window", default="90d", help="recent-work window for never-attested git-only projects")
     fleet.add_argument("--json", action="store_true", dest="as_json", help="machine-readable output")
     focus = sub.add_parser("focus")
-    focus.add_argument("ref", nargs="?", default="", help="goal reference or new statement to declare as current intent")
+    focus.add_argument("ref", nargs="?", default="", help="existing accepted goal reference to declare as current intent")
     focus.add_argument("--note", default="")
     focus.add_argument("--clear", action="store_true", help="end the current focus (events after are undeclared)")
     focus.add_argument("--list", action="store_true", dest="list_focus")
+    formation = sub.add_parser("formation")
+    formation_sub = formation.add_subparsers(dest="formation_command")
+    formation_record = formation_sub.add_parser("record")
+    formation_record.add_argument("--claim", required=True, help="explicit decision claim; never hidden reasoning")
+    formation_record.add_argument("--basis-goal", required=True, help="existing active accepted goal reference")
+    formation_record.add_argument("--artifact", action="append", required=True, help="repository file that uses the claim (repeatable)")
+    formation_record.add_argument("--declared-by", required=True, help="named human or agent declaring the receipt")
+    formation_record.add_argument("--tier", default="agent", choices=["human", "agent"])
+    formation_record.add_argument("--request-id", default="", help="optional idempotency key")
+    formation_sub.add_parser("list")
+    impact = sub.add_parser("impact")
+    impact_sub = impact.add_subparsers(dest="impact_command")
+    impact_show = impact_sub.add_parser("show")
+    impact_show.add_argument("--json", action="store_true", dest="as_json", help="machine-readable output")
+    impact_show.add_argument("--base", default="", help="scope to files changed in merge-base(<ref>, HEAD)..HEAD")
+    impact_revalidate = impact_sub.add_parser("revalidate")
+    impact_revalidate.add_argument("impact", help="impact item id or unique id fragment")
+    impact_revalidate.add_argument("--decision", required=True, choices=["retained", "updated", "retired"])
+    impact_revalidate.add_argument("--attested-by", required=True, help="named human standing behind this item-level decision")
+    impact_revalidate.add_argument("--note", default="")
     goals = sub.add_parser("goals")
     goals_sub = goals.add_subparsers(dest="goals_command")
     tier_help = "who is accountable for this intent (default human)"
@@ -2562,6 +3256,46 @@ def main() -> int:
         else:
             record = set_focus(root, args.ref, args.note)
             print(json.dumps({"focus": record, "output": str(focus_path(root))}, ensure_ascii=False, indent=2))
+    elif args.command == "formation":
+        if args.formation_command == "record":
+            receipt, created = record_formation(
+                root,
+                args.claim,
+                args.basis_goal,
+                args.artifact,
+                args.declared_by,
+                args.tier,
+                args.request_id,
+            )
+            print(json.dumps(
+                {"created": created, "receipt": receipt, "output": str(formation_receipts_path(root))},
+                ensure_ascii=False,
+                indent=2,
+            ))
+        elif args.formation_command == "list":
+            print(json.dumps({"receipts": list_formation_receipts(root)}, ensure_ascii=False, indent=2))
+        else:
+            formation.print_help()
+            return 2
+    elif args.command == "impact":
+        if args.impact_command == "show":
+            state = impact_state(root, args.base)
+            if args.as_json:
+                print(json.dumps(state, ensure_ascii=False, indent=2))
+            else:
+                print(render_impact(state))
+        elif args.impact_command == "revalidate":
+            record = record_impact_revalidation(
+                root, args.impact, args.decision, args.attested_by, args.note
+            )
+            print(json.dumps(
+                {"revalidation": record, "output": str(impact_revalidations_path(root))},
+                ensure_ascii=False,
+                indent=2,
+            ))
+        else:
+            impact.print_help()
+            return 2
     elif args.command == "goals":
         if args.goals_command == "add":
             goal = add_goal(root, args.statement, args.source, args.scope, args.review_state, args.attested_by, args.tier)

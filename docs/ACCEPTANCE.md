@@ -41,7 +41,29 @@ Functional gates:
 - `focus "<goal>"` declares current intent; events in the focus window get
   ground-truth linkage (`supports_mainline: "declared"`, `core_problem`,
   `receipt.reason: "declared"`) overriding the keyword guess, and `focus --clear`
-  ends it. `ledger` coverage reports the declared-vs-inferred split.
+  ends it. `focus` accepts only an existing active accepted goal and never
+  silently creates a human-accepted goal. `ledger` coverage reports the
+  declared-vs-inferred split.
+- named alignment attestations carry `canonicalization_version` and a
+  `subject_digest` over stable problem, goal, goal-event, ledger, and formation
+  content. Volatile generation timestamps do not change the digest; actual
+  captured-content changes mark the prior attestation stale and make review due.
+- `formation record` atomically appends one explicit decision claim and all its
+  declared goal/file edges to `formation/receipts.jsonl`. The basis must be an
+  existing active accepted goal; artifacts must be files inside the current Git
+  repository. Invalid input writes nothing, and repeated `--request-id` values
+  are idempotent or rejected on content conflict.
+- `goals retire/replace` deterministically traverses declared formation edges
+  only and appends one idempotent invalidation event. Exact affected files become
+  `needs_revalidation`; unlinked files and inferred edges do not.
+- `impact show --base <ref>` scopes impact to linked files changed in
+  `merge-base(<ref>, HEAD)..HEAD`. The Project Alignment Review includes the
+  goal → explicit claim → file chain, evidence class, and coverage boundary.
+- `impact revalidate <impact-id> --decision retained|updated|retired
+  --attested-by <human>` records a named item-level attestation and clears only
+  that item. A project-wide alignment attestation cannot clear impact debt.
+- every impact surface says stale basis, not a correctness verdict; it never
+  labels an affected artifact incorrect or wrong.
 - `review` emits a Markdown **Project Alignment Review** with Coverage & Blind
   Spots, Goal Provenance, and **Triage** sections, and no drift scores or
   verdicts.
@@ -107,6 +129,11 @@ Functional gates:
   scores, no ranking, no cross-project totals. `--json` carries per-project
   `source`, `accountable`, `staleness_days`, `owed`, and `pending_proposal`.
 - redacted sample contains no private paths, raw prompts, or transcript payloads.
+- the frozen Basis Change Impact fixture resolves to exactly three affected and
+  one unaffected file. `run_dogfood.py` reproduces `dogfood-results.json` over
+  three actual agent-generated milestone commits; all case gates pass, while the
+  artifact explicitly names retrospective author-only and external-validity
+  limits.
 
 Boundary:
 

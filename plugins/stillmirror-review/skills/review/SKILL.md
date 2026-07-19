@@ -26,6 +26,8 @@ The review must include:
 - Mainline Hypothesis;
 - Goal Provenance (each goal's lifecycle state and how many allocations
   reinforced it);
+- Basis Change Impact (goal → explicit claim → file chains with stale basis,
+  scoped to branch-changed files when `--base` is used);
 - Triage — what's worth the user's attention (clusters by goal, by session, and
   by agent — real subagent identity, a session is not an agent — plus surfaced
   exceptions like unlinked work);
@@ -44,6 +46,32 @@ distinct subagents (`agents_touched`) ran since the last review.
 
 Do not output drift scores, productivity scores, objective-capture diagnoses, or
 advice about what the user should pursue.
+
+## Basis Change Impact — declared receipts, item-level human decisions
+
+Formation receipts must be recorded at a real decision boundary, when the claim
+and affected files are explicit. Do not reconstruct them from hidden reasoning
+or invent them retrospectively during review. A worker can record one atomically:
+
+```sh
+"${CLAUDE_PLUGIN_ROOT}/bin/stillmirror-review" formation record \
+  --claim "<explicit decision claim>" \
+  --basis-goal "<active accepted goal>" \
+  --artifact "<repository file>" \
+  --declared-by "<named human or agent>" --tier agent
+```
+
+When the review surfaces `needs_revalidation`, explain that the recorded basis
+changed; do not call the artifact wrong. Ask the user separately about each
+impact item. Only after the user decides, record their item-level decision:
+
+```sh
+"${CLAUDE_PLUGIN_ROOT}/bin/stillmirror-review" impact revalidate <impact-id> \
+  --decision retained|updated|retired --attested-by "<the user's name>"
+```
+
+Never revalidate on the user's behalf. A project-wide `alignment record` or
+proposal ratification does not clear pending impact items.
 
 ## Assisted attestation — you draft, the human ratifies
 

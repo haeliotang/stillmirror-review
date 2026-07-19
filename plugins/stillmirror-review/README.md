@@ -8,7 +8,9 @@ evidence. It observes:
 
 - what problem seems to be driving the project;
 - where attention and agent budget are actually allocated;
-- whether recent allocations still match the goals the user has reviewed or accepted.
+- whether recent allocations still match the goals the user has reviewed or accepted;
+- which explicitly linked decisions and files need revalidation after an
+  accepted goal changes.
 
 It does not decide what the goal should be.
 
@@ -54,6 +56,9 @@ plugins/stillmirror-review/bin/stillmirror-review focus --clear
 plugins/stillmirror-review/bin/stillmirror-review goals replace "Maintain hook reliability" --with "Ship a trustworthy review layer"
 plugins/stillmirror-review/bin/stillmirror-review goals retire "<goal id or statement>"
 plugins/stillmirror-review/bin/stillmirror-review goals events
+plugins/stillmirror-review/bin/stillmirror-review formation record --claim "Refresh-token rotation is required" --basis-goal "<goal>" --artifact src/auth/session.py --declared-by "claude-code" --tier agent
+plugins/stillmirror-review/bin/stillmirror-review impact show --base origin/main
+plugins/stillmirror-review/bin/stillmirror-review impact revalidate "<impact id>" --decision retained --attested-by "Your Name"
 plugins/stillmirror-review/bin/stillmirror-review ledger --since 30d
 plugins/stillmirror-review/bin/stillmirror-review correct --event <event_id> --label evaluation --attested-by "Your Name"
 plugins/stillmirror-review/bin/stillmirror-review review-due
@@ -105,6 +110,7 @@ The plugin writes only inside the current project:
   goals/         accepted-goals.json, goal-events.jsonl, focus.jsonl
   allocations/   allocation-ledger.json, corrections.jsonl, rubric.json
   alignment/     alignment-reviews.jsonl
+  formation/     receipts.jsonl, invalidation-events.jsonl, revalidations.jsonl
   reviews/       *-project-alignment-review.md
 ```
 
@@ -154,4 +160,6 @@ classifier on every later run:
 
 StillMirror Review does not output drift scores, productivity scores,
 objective-capture diagnoses, personality judgments, or recommendations about
-what your goals should be.
+what your goals should be. `needs_revalidation` means a recorded basis changed,
+not that an artifact is wrong. Formation receipts are declared and partial; they
+do not expose hidden reasoning or prove capture completeness.

@@ -266,7 +266,18 @@ honest:
   claim**, not external-person validity nor the at-scale thesis (that needs N in
   the tens). It is also the first build that is **its own validation**: the one
   thing one overseer can test alone, on a real two-project fleet.
-- **v1.0 — Objective provenance-lite for agentic projects.**
+- **v1.0 — Basis Change Impact / objective provenance-lite** *(shipped)*.
+  `formation record` atomically binds an explicit decision claim to an active
+  accepted goal and file-level artifacts. Goal replacement or retirement
+  propagates only through declared edges into per-file `needs_revalidation`
+  items; a named human settles each item independently as retained, updated, or
+  retired. Alignment attestations now bind to a canonical digest of their actual
+  review subject, and `focus` can no longer manufacture an accepted human goal.
+  Branch review scopes impact to changed files while the global view can expose
+  declared descendants ordinary diff does not show. **Evidence limit:** three
+  retrospective author-dogfood cases validate the mechanism and incremental
+  information over diff/ledger, not external-person validity, prospective
+  capture quality, or market demand.
 - **Deferred** — research / writing drift review.
 
 ## The accountability floor
