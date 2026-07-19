@@ -298,6 +298,79 @@ def short_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:12]
 
 
+SUBJECT_CANONICALIZATION_VERSION = 1
+
+
+def canonical_digest(value: Any) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+def review_subject(root: Path) -> dict[str, Any]:
+    """Stable content a named alignment attestation actually stands behind.
+
+    Volatile generation timestamps and relative-window timestamps are excluded;
+    goal/problem state, goal events, and ledger content are included. A digest
+    proves captured content identity, never that capture was complete.
+    """
+    problem = load_json(sm_dir(root) / "problems" / "mainline-hypothesis.json", {})
+    goals = load_json(accepted_goals_path(root), {"schema_version": 1, "goals": []})
+    if isinstance(goals, dict):
+        goals = dict(goals)
+        goal_rows = goals.get("goals") if isinstance(goals.get("goals"), list) else []
+        goals["goals"] = sorted(
+            goal_rows,
+            key=lambda goal: (str(goal.get("id") or ""), str(goal.get("statement") or "")),
+        )
+    ledger = load_json(sm_dir(root) / "allocations" / "allocation-ledger.json", {})
+    stable_ledger: dict[str, Any] = {}
+    if isinstance(ledger, dict):
+        for key in (
+            "schema_version",
+            "rubric",
+            "entry_count",
+            "allocation_counts",
+            "coverage",
+            "goal_reinforcement",
+            "entries",
+        ):
+            if key in ledger:
+                stable_ledger[key] = ledger[key]
+        if isinstance(stable_ledger.get("entries"), list):
+            stable_ledger["entries"] = sorted(
+                stable_ledger["entries"],
+                key=lambda entry: (
+                    str(entry.get("event_id") or ""),
+                    str(entry.get("timestamp") or ""),
+                    str(entry.get("source") or ""),
+                ),
+            )
+    events = sorted(
+        list_goal_events(root),
+        key=lambda event: (str(event.get("recorded_at") or ""), str(event.get("event_id") or "")),
+    )
+    return {
+        "canonicalization_version": SUBJECT_CANONICALIZATION_VERSION,
+        "problem": problem if isinstance(problem, dict) else {},
+        "goals": goals if isinstance(goals, dict) else {"schema_version": 1, "goals": []},
+        "goal_events": events,
+        "ledger": stable_ledger,
+    }
+
+
+def review_subject_identity(root: Path) -> dict[str, Any]:
+    subject = review_subject(root)
+    return {
+        "canonicalization_version": SUBJECT_CANONICALIZATION_VERSION,
+        "subject_digest": canonical_digest(subject),
+    }
+
+
 def slug(text: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9]+", "-", text.strip().lower()).strip("-")
     return cleaned[:48] or "goal"
@@ -623,13 +696,18 @@ def set_problem(
 
 
 def set_focus(root: Path, ref: str, note: str = "") -> dict[str, Any]:
-    """Declare the current work's intent. Resolves an accepted goal, or adds it."""
+    """Declare current intent against an existing, authorized goal."""
     if not ref.strip():
-        raise SystemExit("focus needs a goal reference or statement")
+        raise SystemExit("focus needs an existing accepted goal reference")
     doc = load_accepted_goals(root)
     goal = resolve_goal(doc, ref)
     if goal is None:
-        goal = add_goal(root, ref, "user", "project", "accepted")
+        raise SystemExit(
+            f"no unique accepted goal matched: {ref!r}; add or accept the goal "
+            "explicitly before declaring focus"
+        )
+    if goal.get("retired") or goal.get("superseded") or goal.get("review_state") == "proposed":
+        raise SystemExit(f"focus requires an active accepted goal: {ref!r}")
     return append_focus(root, str(goal.get("id") or ""), str(goal.get("statement") or ref.strip()), note)
 
 
@@ -735,6 +813,7 @@ def _write_alignment(
     init_project(root, quiet=True)
     _validate_labels(labels)
     ledger = load_json(sm_dir(root) / "allocations" / "allocation-ledger.json", {})
+    subject = review_subject_identity(root)
     record = {
         "schema_version": 1,
         "recorded_at": utc_now(),
@@ -745,6 +824,7 @@ def _write_alignment(
         "human_attested": True,
         "ledger_generated_at": ledger.get("generated_at") if isinstance(ledger, dict) else None,
         "ledger_entry_count": ledger.get("entry_count") if isinstance(ledger, dict) else None,
+        **subject,
     }
     if extra:
         record.update(extra)
@@ -823,6 +903,7 @@ def append_proposal(root: Path, labels: list[str], note: str, drafted_by: str, r
             "assistant); a draft is not an attestation"
         )
     ledger = load_json(sm_dir(root) / "allocations" / "allocation-ledger.json", {})
+    subject = review_subject_identity(root)
     proposal = {
         "schema_version": 1,
         "proposed_at": utc_now(),
@@ -834,6 +915,7 @@ def append_proposal(root: Path, labels: list[str], note: str, drafted_by: str, r
         "review_file": _review_ref(root, review_file),
         "ledger_generated_at": ledger.get("generated_at") if isinstance(ledger, dict) else None,
         "ledger_entry_count": ledger.get("entry_count") if isinstance(ledger, dict) else None,
+        **subject,
     }
     proposal["proposal_id"] = short_hash(json.dumps(proposal, sort_keys=True, ensure_ascii=False))
     path = proposals_path(root)
@@ -1166,7 +1248,8 @@ def compute_review_due(root: Path, threshold: int) -> dict[str, Any]:
     and the last alignment record.
     """
     init_project(root, quiet=True)
-    reference = last_reviewed_at(root)
+    last = last_attestation(root)
+    reference = parse_time(last.get("recorded_at")) if last else None
     epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
     events = load_trace_events(root, reference or epoch)
     new_allocations = [
@@ -1191,7 +1274,19 @@ def compute_review_due(root: Path, threshold: int) -> dict[str, Any]:
             event for event in goal_events
             if (parse_time(event.get("recorded_at")) or epoch) > reference
         ]
-    due = len(new_allocations) >= threshold or len(goal_events) > 0
+    subject = review_subject_identity(root)
+    last_subject_digest = str(last.get("subject_digest") or "") if last else ""
+    if last is None:
+        subject_binding = "none"
+    elif last_subject_digest:
+        subject_binding = "bound"
+    else:
+        subject_binding = "legacy_unbound"
+    subject_stale = bool(
+        last_subject_digest
+        and last_subject_digest != subject["subject_digest"]
+    )
+    due = len(new_allocations) >= threshold or len(goal_events) > 0 or subject_stale
     # A drafted-but-unratified attestation: the seat has a draft in it but is
     # still empty (a draft is not an attestation) until a human ratifies.
     pending_proposal = latest_pending_proposal(root) is not None
@@ -1203,6 +1298,11 @@ def compute_review_due(root: Path, threshold: int) -> dict[str, Any]:
         # finding, not a default — surfaced for any consumer, human or automation.
         "ever_attested": reference is not None,
         "pending_proposal": pending_proposal,
+        "canonicalization_version": SUBJECT_CANONICALIZATION_VERSION,
+        "subject_digest": subject["subject_digest"],
+        "last_subject_digest": last_subject_digest or None,
+        "subject_binding": subject_binding,
+        "subject_stale": subject_stale,
         "new_allocations": len(new_allocations),
         "new_goal_events": len(goal_events),
         "sessions_touched": len(sessions),
@@ -1555,6 +1655,16 @@ def render_review(root: Path, since_value: str, base_ref: str | None = None) -> 
             f"- Distinct subagents since: {debt.get('agents_touched', 0)}",
         ]
     )
+    if debt.get("subject_stale"):
+        lines.extend(
+            [
+                "",
+                "> **The last attestation is stale.** Its recorded subject digest no longer "
+                "matches the current goals, goal history, problem, or allocation ledger. "
+                "This proves the captured review basis changed; it does not prove which "
+                "current conclusion is wrong.",
+            ]
+        )
     # Make abdication visible: an empty judgment seat is the finding, not a default.
     if last_att is None and debt["new_allocations"] > 0:
         lines.extend(
@@ -2460,7 +2570,7 @@ def main() -> int:
     fleet.add_argument("--window", default="90d", help="recent-work window for never-attested git-only projects")
     fleet.add_argument("--json", action="store_true", dest="as_json", help="machine-readable output")
     focus = sub.add_parser("focus")
-    focus.add_argument("ref", nargs="?", default="", help="goal reference or new statement to declare as current intent")
+    focus.add_argument("ref", nargs="?", default="", help="existing accepted goal reference to declare as current intent")
     focus.add_argument("--note", default="")
     focus.add_argument("--clear", action="store_true", help="end the current focus (events after are undeclared)")
     focus.add_argument("--list", action="store_true", dest="list_focus")

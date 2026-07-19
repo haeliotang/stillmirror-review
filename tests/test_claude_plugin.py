@@ -923,6 +923,76 @@ class StillMirrorPluginTests(unittest.TestCase):
             ledger2 = self.load_ledger(project)
             self.assertGreaterEqual(ledger2["coverage"]["inferred_entries"], 1)
 
+    def test_focus_unknown_goal_does_not_create_accepted_goal(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.run_script(project, "focus", "invented by the worker")
+            self.assertEqual(self._goals(project), [])
+
+    def test_attestation_stales_when_goal_content_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.run_script(project, "goals", "add", "ship session recovery")
+            self.run_script(project, "ledger", "--since", "30d")
+            record = json.loads(self.run_script(
+                project, "alignment", "record", "--label", "necessary_support", "--attested-by", "Hao"
+            ).stdout)["record"]
+            self.assertEqual(record["canonicalization_version"], 1)
+            self.assertTrue(record["subject_digest"].startswith("sha256:"))
+
+            goals_path = project / ".stillmirror" / "goals" / "accepted-goals.json"
+            goals = json.loads(goals_path.read_text())
+            goals["goals"][0]["statement"] = "ship cross-device session recovery"
+            goals_path.write_text(json.dumps(goals, indent=2) + "\n")
+
+            due = json.loads(self.run_script(project, "review-due", "--threshold", "999").stdout)
+            self.assertTrue(due["due"])
+            self.assertTrue(due["subject_stale"])
+            self.assertEqual(due["subject_binding"], "bound")
+            self.assertEqual(due["new_allocations"], 0)
+            self.assertEqual(due["new_goal_events"], 0)
+            self.run_script(project, "review", "--since", "30d")
+            review = next((project / ".stillmirror" / "reviews").glob("*-project-alignment-review.md"))
+            self.assertIn("last attestation is stale", review.read_text().casefold())
+
+    def test_attestation_stales_when_ledger_content_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.capture(project, self.edit_payload(project))
+            self.run_script(project, "ledger", "--since", "30d")
+            self.run_script(
+                project, "alignment", "record", "--label", "necessary_support", "--attested-by", "Hao"
+            )
+
+            ledger_path = project / ".stillmirror" / "allocations" / "allocation-ledger.json"
+            ledger = json.loads(ledger_path.read_text())
+            ledger["entries"][0]["allocated_to"] = ["evaluation"]
+            ledger_path.write_text(json.dumps(ledger, indent=2) + "\n")
+
+            due = json.loads(self.run_script(project, "review-due", "--threshold", "999").stdout)
+            self.assertTrue(due["due"])
+            self.assertTrue(due["subject_stale"])
+            self.assertEqual(due["new_allocations"], 0)
+
+    def test_unchanged_subject_digest_keeps_attestation_current(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.run_script(project, "goals", "add", "ship session recovery")
+            self.run_script(project, "ledger", "--since", "30d")
+            record = json.loads(self.run_script(
+                project, "alignment", "record", "--label", "necessary_support", "--attested-by", "Hao"
+            ).stdout)["record"]
+            due = json.loads(self.run_script(project, "review-due", "--threshold", "999").stdout)
+            self.assertFalse(due["due"])
+            self.assertFalse(due["subject_stale"])
+            self.assertEqual(due["subject_digest"], record["subject_digest"])
+            self.assertEqual(due["last_subject_digest"], record["subject_digest"])
+            self.run_script(project, "review", "--since", "30d")
+            regenerated = json.loads(self.run_script(project, "review-due", "--threshold", "999").stdout)
+            self.assertFalse(regenerated["subject_stale"])
+            self.assertEqual(regenerated["subject_digest"], record["subject_digest"])
+
     def test_abdication_is_visible_and_nudge_is_consumer_agnostic(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             project = Path(temp)
