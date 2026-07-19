@@ -355,10 +355,20 @@ def review_subject(root: Path) -> dict[str, Any]:
         list_goal_events(root),
         key=lambda event: (str(event.get("recorded_at") or ""), str(event.get("event_id") or "")),
     )
-    formation = sorted(
-        list_formation_receipts(root),
-        key=lambda receipt: str(receipt.get("receipt_id") or ""),
-    )
+    formation = {
+        "receipts": sorted(
+            list_formation_receipts(root),
+            key=lambda receipt: str(receipt.get("receipt_id") or ""),
+        ),
+        "invalidations": sorted(
+            list_invalidation_events(root),
+            key=lambda event: str(event.get("event_id") or ""),
+        ),
+        "revalidations": sorted(
+            list_impact_revalidations(root),
+            key=lambda record: (str(record.get("impact_id") or ""), str(record.get("recorded_at") or "")),
+        ),
+    }
     return {
         "canonicalization_version": SUBJECT_CANONICALIZATION_VERSION,
         "problem": problem if isinstance(problem, dict) else {},
@@ -585,10 +595,13 @@ def retire_goal(root: Path, ref: str, note: str = "") -> dict[str, Any]:
     goal = resolve_goal(doc, ref)
     if goal is None:
         raise SystemExit(f"no unique goal matched: {ref!r}")
+    if goal.get("retired"):
+        return goal
     goal["retired"] = True
     goal["updated_at"] = utc_now()
     write_json(accepted_goals_path(root), doc)
-    append_goal_event(root, "goal_retired", str(goal.get("id") or ""), str(goal.get("statement") or ""), note=note)
+    event = append_goal_event(root, "goal_retired", str(goal.get("id") or ""), str(goal.get("statement") or ""), note=note)
+    propagate_goal_invalidation(root, str(goal.get("id") or ""), "goal_retired", "", event)
     return goal
 
 
@@ -614,6 +627,16 @@ def replace_goal(
         raise SystemExit(f"no unique goal matched: {ref!r}")
     old_id = str(old.get("id") or "")
     new_id = f"goal-{slug(new_statement)}-{short_hash(new_statement)}"
+    if old.get("superseded"):
+        if old.get("superseded_by") == new_id:
+            existing = resolve_goal(doc, new_id)
+            if existing is None:
+                raise SystemExit(f"superseding goal is missing: {new_id!r}")
+            return {"old": old, "new": existing}
+        raise SystemExit(
+            f"goal is already superseded by {old.get('superseded_by')!r}; "
+            "replace the current goal instead"
+        )
     now = utc_now()
     new_goal = {
         "id": new_id,
@@ -638,7 +661,8 @@ def replace_goal(
     old["superseded_by"] = new_id
     old["updated_at"] = now
     write_json(accepted_goals_path(root), doc)
-    append_goal_event(root, "goal_replaced", new_id, saved_new["statement"], source=source, note=note, supersedes=old_id)
+    event = append_goal_event(root, "goal_replaced", new_id, saved_new["statement"], source=source, note=note, supersedes=old_id)
+    propagate_goal_invalidation(root, old_id, "goal_replaced", new_id, event)
     return {"old": old, "new": saved_new}
 
 
@@ -900,6 +924,275 @@ def record_formation(
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n")
     return receipt, True
+
+
+def invalidation_events_path(root: Path) -> Path:
+    return sm_dir(root) / "formation" / "invalidation-events.jsonl"
+
+
+def impact_revalidations_path(root: Path) -> Path:
+    return sm_dir(root) / "formation" / "revalidations.jsonl"
+
+
+def list_invalidation_events(root: Path) -> list[dict[str, Any]]:
+    path = invalidation_events_path(root)
+    if not path.exists():
+        return []
+    events: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            events.append(value)
+    return events
+
+
+def list_impact_revalidations(root: Path) -> list[dict[str, Any]]:
+    path = impact_revalidations_path(root)
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            records.append(value)
+    return records
+
+
+def propagate_goal_invalidation(
+    root: Path,
+    old_goal_id: str,
+    cause: str,
+    new_goal_id: str,
+    goal_event: dict[str, Any],
+) -> dict[str, Any]:
+    """Snapshot descendants of a changed goal over explicit declared edges."""
+    goal_event_id = str(goal_event.get("event_id") or "")
+    for event in list_invalidation_events(root):
+        if event.get("goal_event_id") == goal_event_id:
+            return event
+
+    claims: dict[str, dict[str, Any]] = {}
+    support_edges: dict[str, dict[str, Any]] = {}
+    artifact_edges: list[tuple[str, dict[str, Any], str]] = []
+    for receipt in list_formation_receipts(root):
+        claim = receipt.get("claim") if isinstance(receipt.get("claim"), dict) else {}
+        claim_id = str(claim.get("claim_id") or "")
+        if not claim_id:
+            continue
+        claims[claim_id] = claim
+        edges = receipt.get("edges") if isinstance(receipt.get("edges"), list) else []
+        for edge in edges:
+            if not isinstance(edge, dict) or edge.get("origin") != "declared":
+                continue
+            if edge.get("relation") == "supports" and edge.get("basis_goal_id") == old_goal_id:
+                support_edges[claim_id] = edge
+            elif edge.get("relation") == "used_by":
+                artifact_edges.append((claim_id, edge, str(receipt.get("receipt_id") or "")))
+
+    items: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for claim_id, edge, receipt_id in artifact_edges:
+        support = support_edges.get(claim_id)
+        artifact = edge.get("artifact") if isinstance(edge.get("artifact"), dict) else {}
+        path = str(artifact.get("path") or "")
+        digest = str(artifact.get("content_digest") or "")
+        key = (claim_id, path, digest)
+        if support is None or not path or key in seen:
+            continue
+        seen.add(key)
+        impact_id = f"impact-{short_hash(':'.join((goal_event_id, claim_id, path, digest)))}"
+        items.append(
+            {
+                "impact_id": impact_id,
+                "status": "needs_revalidation",
+                "origin": "declared",
+                "claim": claims.get(claim_id) or {"claim_id": claim_id},
+                "artifact": artifact,
+                "basis_goal_id": old_goal_id,
+                "basis_goal_digest": support.get("basis_goal_digest"),
+                "support_edge_id": support.get("edge_id"),
+                "artifact_edge_id": edge.get("edge_id"),
+                "formation_receipt_id": receipt_id,
+            }
+        )
+    items.sort(key=lambda item: (str(item["artifact"].get("path") or ""), str(item["impact_id"])))
+    event = {
+        "schema_version": 1,
+        "event_id": f"invalidation-{short_hash(goal_event_id or canonical_digest(goal_event))}",
+        "recorded_at": utc_now(),
+        "cause": cause,
+        "goal_event_id": goal_event_id,
+        "old_goal_id": old_goal_id,
+        "new_goal_id": new_goal_id,
+        "affected_claim_ids": sorted(support_edges),
+        "items": items,
+        "boundary": "Changed recorded basis; needs_revalidation is not a correctness verdict.",
+    }
+    path = invalidation_events_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+    return event
+
+
+def impact_state(root: Path) -> dict[str, Any]:
+    events = list_invalidation_events(root)
+    latest: dict[str, dict[str, Any]] = {}
+    for record in list_impact_revalidations(root):
+        impact_id = str(record.get("impact_id") or "")
+        if impact_id:
+            latest[impact_id] = record
+    items: list[dict[str, Any]] = []
+    for event in events:
+        for raw_item in event.get("items") or []:
+            if not isinstance(raw_item, dict):
+                continue
+            item = dict(raw_item)
+            item["invalidation_event_id"] = event.get("event_id")
+            item["cause"] = event.get("cause")
+            item["new_goal_id"] = event.get("new_goal_id")
+            revalidation = latest.get(str(item.get("impact_id") or ""))
+            if revalidation:
+                item["status"] = "revalidated"
+                item["decision"] = revalidation.get("decision")
+                item["revalidation"] = revalidation
+            items.append(item)
+    items.sort(key=lambda item: (str(item.get("status") or ""), str((item.get("artifact") or {}).get("path") or "")))
+    needs_revalidation = sum(1 for item in items if item.get("status") == "needs_revalidation")
+    return {
+        "schema_version": 1,
+        "events": events,
+        "items": items,
+        "needs_revalidation": needs_revalidation,
+        "revalidated": len(items) - needs_revalidation,
+        "coverage": {
+            "edge_origin": "declared only",
+            "not_captured": [
+                "Dependencies that were not explicitly recorded in a formation receipt.",
+                "Hidden reasoning or evidence that never crossed a decision boundary.",
+            ],
+        },
+        "boundary": "A stale recorded basis needs revalidation; this state is not a correctness verdict.",
+    }
+
+
+def resolve_impact_item(root: Path, ref: str) -> dict[str, Any] | None:
+    items = [item for event in list_invalidation_events(root) for item in (event.get("items") or [])]
+    exact = [item for item in items if item.get("impact_id") == ref]
+    if len(exact) == 1:
+        return exact[0]
+    partial = [item for item in items if ref and ref in str(item.get("impact_id") or "")]
+    return partial[0] if len(partial) == 1 else None
+
+
+def record_impact_revalidation(
+    root: Path,
+    impact_ref: str,
+    decision: str,
+    attested_by: str,
+    note: str = "",
+) -> dict[str, Any]:
+    if not attested_by.strip():
+        raise SystemExit("--attested-by is required — name the human revalidating this impact item")
+    if decision not in ("retained", "updated", "retired"):
+        raise SystemExit("--decision must be retained, updated, or retired")
+    item = resolve_impact_item(root, impact_ref)
+    if item is None:
+        raise SystemExit(f"no unique impact item matched: {impact_ref!r}")
+    artifact = item.get("artifact") if isinstance(item.get("artifact"), dict) else {}
+    artifact_path = str(artifact.get("path") or "")
+    current_digest = None
+    current = (root.resolve() / artifact_path).resolve()
+    if decision in ("retained", "updated"):
+        try:
+            current.relative_to(root.resolve())
+        except ValueError:
+            raise SystemExit(f"impact artifact escaped the repository: {artifact_path!r}") from None
+        if not current.is_file():
+            raise SystemExit(
+                f"artifact must exist for a {decision} decision: {artifact_path!r}; "
+                "use retired when it was removed"
+            )
+        current_digest = file_content_digest(current)
+    record = {
+        "schema_version": 1,
+        "record_id": f"revalidation-{short_hash(':'.join((str(item.get('impact_id') or ''), utc_now(), decision, attested_by.strip())))}",
+        "recorded_at": utc_now(),
+        "impact_id": item.get("impact_id"),
+        "artifact_path": artifact_path,
+        "decision": decision,
+        "note": note,
+        "attested_by": attested_by.strip(),
+        "human_attested": True,
+        "current_content_digest": current_digest,
+        "boundary": "Named item-level revalidation; it does not clear any other impact item.",
+    }
+    path = impact_revalidations_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    return record
+
+
+def render_impact(state: dict[str, Any]) -> str:
+    lines = [
+        "# StillMirror Basis Change Impact",
+        "",
+        f"- Basis-change events: {len(state.get('events') or [])}",
+        f"- Needs revalidation: {state.get('needs_revalidation', 0)}",
+        f"- Revalidated: {state.get('revalidated', 0)}",
+        "",
+        "This is recorded basis state, not a correctness verdict.",
+        "",
+        "## Needs revalidation",
+        "",
+    ]
+    pending = [item for item in state.get("items") or [] if item.get("status") == "needs_revalidation"]
+    if not pending:
+        lines.append("- (none)")
+    for item in pending:
+        artifact = item.get("artifact") or {}
+        claim = item.get("claim") or {}
+        lines.extend(
+            [
+                f"- `{item.get('impact_id')}` — `{artifact.get('path')}`",
+                f"  - changed goal: `{item.get('basis_goal_id')}` ({item.get('cause')})",
+                f"  - declared claim: {claim.get('statement') or claim.get('claim_id')}",
+                "  - edge origin: declared",
+            ]
+        )
+    revalidated = [item for item in state.get("items") or [] if item.get("status") == "revalidated"]
+    lines.extend(["", "## Revalidated", ""])
+    if not revalidated:
+        lines.append("- (none)")
+    for item in revalidated:
+        artifact = item.get("artifact") or {}
+        record = item.get("revalidation") or {}
+        lines.append(
+            f"- `{artifact.get('path')}` — {item.get('decision')} by "
+            f"{record.get('attested_by') or 'unknown'}"
+        )
+    lines.extend(
+        [
+            "",
+            "## Coverage",
+            "",
+            "- Propagation follows explicit declared formation edges only.",
+            "- Unrecorded dependencies remain outside this view.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
 
 
 ALIGNMENT_LABELS = {
@@ -2766,6 +3059,15 @@ def main() -> int:
     formation_record.add_argument("--tier", default="agent", choices=["human", "agent"])
     formation_record.add_argument("--request-id", default="", help="optional idempotency key")
     formation_sub.add_parser("list")
+    impact = sub.add_parser("impact")
+    impact_sub = impact.add_subparsers(dest="impact_command")
+    impact_show = impact_sub.add_parser("show")
+    impact_show.add_argument("--json", action="store_true", dest="as_json", help="machine-readable output")
+    impact_revalidate = impact_sub.add_parser("revalidate")
+    impact_revalidate.add_argument("impact", help="impact item id or unique id fragment")
+    impact_revalidate.add_argument("--decision", required=True, choices=["retained", "updated", "retired"])
+    impact_revalidate.add_argument("--attested-by", required=True, help="named human standing behind this item-level decision")
+    impact_revalidate.add_argument("--note", default="")
     goals = sub.add_parser("goals")
     goals_sub = goals.add_subparsers(dest="goals_command")
     tier_help = "who is accountable for this intent (default human)"
@@ -2884,6 +3186,25 @@ def main() -> int:
             print(json.dumps({"receipts": list_formation_receipts(root)}, ensure_ascii=False, indent=2))
         else:
             formation.print_help()
+            return 2
+    elif args.command == "impact":
+        if args.impact_command == "show":
+            state = impact_state(root)
+            if args.as_json:
+                print(json.dumps(state, ensure_ascii=False, indent=2))
+            else:
+                print(render_impact(state))
+        elif args.impact_command == "revalidate":
+            record = record_impact_revalidation(
+                root, args.impact, args.decision, args.attested_by, args.note
+            )
+            print(json.dumps(
+                {"revalidation": record, "output": str(impact_revalidations_path(root))},
+                ensure_ascii=False,
+                indent=2,
+            ))
+        else:
+            impact.print_help()
             return 2
     elif args.command == "goals":
         if args.goals_command == "add":

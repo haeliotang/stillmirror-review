@@ -1128,6 +1128,165 @@ class StillMirrorPluginTests(unittest.TestCase):
                 )
             self.assertEqual(len(receipts.read_text().splitlines()), 1)
 
+    def test_goal_replacement_matches_frozen_fixture_exactly(self) -> None:
+        fixture = json.loads(BASIS_IMPACT_FIXTURE.read_text(encoding="utf-8"))
+        old_goal = next(goal for goal in fixture["goals"] if goal["goal_id"] == fixture["goal_event"]["goal_id"])
+        new_goal = next(goal for goal in fixture["goals"] if goal["goal_id"] == fixture["goal_event"]["superseded_by"])
+        claim = fixture["claims"][0]
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            subprocess.run(["git", "-C", str(project), "init"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(project), "config", "user.email", "t@t.co"], check=True)
+            subprocess.run(["git", "-C", str(project), "config", "user.name", "Hao"], check=True)
+            for path_text in fixture["repository_files"]:
+                path = project / path_text
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"fixture for {path_text}\n")
+            subprocess.run(["git", "-C", str(project), "add", "-A"], check=True)
+            subprocess.run(["git", "-C", str(project), "commit", "-m", "fixture"], check=True, capture_output=True)
+            goal = json.loads(self.run_script(project, "goals", "add", old_goal["statement"]).stdout)["goal"]
+            artifacts = [item for path in fixture["expected"]["affected_artifacts"] for item in ("--artifact", path)]
+            self.run_script(
+                project,
+                "formation", "record",
+                "--claim", claim["statement"],
+                "--basis-goal", goal["id"],
+                *artifacts,
+                "--declared-by", claim["declared_by"]["name"],
+                "--tier", claim["declared_by"]["tier"],
+            )
+            self.run_script(project, "goals", "replace", goal["id"], "--with", new_goal["statement"])
+
+            impact = json.loads(self.run_script(project, "impact", "show", "--json").stdout)
+            self.assertEqual(len(impact["events"]), 1)
+            self.assertEqual(impact["events"][0]["cause"], "goal_replaced")
+            self.assertEqual(impact["needs_revalidation"], 3)
+            affected = {item["artifact"]["path"] for item in impact["items"]}
+            self.assertEqual(affected, set(fixture["expected"]["affected_artifacts"]))
+            self.assertFalse(affected & set(fixture["expected"]["unaffected_artifacts"]))
+            self.assertEqual({item["status"] for item in impact["items"]}, {"needs_revalidation"})
+            self.assertEqual({item["origin"] for item in impact["items"]}, {"declared"})
+            self.assertNotIn("incorrect", json.dumps(impact).casefold())
+            rendered = self.run_script(project, "impact", "show").stdout.casefold()
+            self.assertIn("needs revalidation", rendered)
+            self.assertNotIn("incorrect", rendered)
+            self.assertNotIn("wrong", rendered)
+
+    def test_inferred_formation_edge_does_not_drive_invalidation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            subprocess.run(["git", "-C", str(project), "init"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(project), "config", "user.email", "t@t.co"], check=True)
+            subprocess.run(["git", "-C", str(project), "config", "user.name", "Hao"], check=True)
+            (project / "artifact.py").write_text("value = 1\n")
+            goal = json.loads(self.run_script(project, "goals", "add", "declared basis").stdout)["goal"]
+            self.run_script(
+                project,
+                "formation", "record",
+                "--claim", "Machine-suggested relationship",
+                "--basis-goal", goal["id"],
+                "--artifact", "artifact.py",
+                "--declared-by", "fixture-agent",
+                "--tier", "agent",
+            )
+            receipts_path = project / ".stillmirror" / "formation" / "receipts.jsonl"
+            receipt = json.loads(receipts_path.read_text())
+            for edge in receipt["edges"]:
+                edge["origin"] = "inferred"
+            receipts_path.write_text(json.dumps(receipt) + "\n")
+
+            self.run_script(project, "goals", "retire", goal["id"])
+            impact = json.loads(self.run_script(project, "impact", "show", "--json").stdout)
+            self.assertEqual(impact["needs_revalidation"], 0)
+            self.assertEqual(impact["items"], [])
+            self.assertEqual(impact["coverage"]["edge_origin"], "declared only")
+
+    def test_goal_retirement_and_replacement_are_idempotent(self) -> None:
+        def setup(project: Path, goal_statement: str) -> dict:
+            subprocess.run(["git", "-C", str(project), "init"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(project), "config", "user.email", "t@t.co"], check=True)
+            subprocess.run(["git", "-C", str(project), "config", "user.name", "Hao"], check=True)
+            (project / "artifact.py").write_text("value = 1\n")
+            goal = json.loads(self.run_script(project, "goals", "add", goal_statement).stdout)["goal"]
+            self.run_script(
+                project,
+                "formation", "record",
+                "--claim", "A bounded decision",
+                "--basis-goal", goal["id"],
+                "--artifact", "artifact.py",
+                "--declared-by", "fixture-agent",
+                "--tier", "agent",
+            )
+            return goal
+
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            retired_project = Path(first)
+            retired_goal = setup(retired_project, "retire this")
+            self.run_script(retired_project, "goals", "retire", retired_goal["id"])
+            self.run_script(retired_project, "goals", "retire", retired_goal["id"])
+            retired = json.loads(self.run_script(retired_project, "impact", "show", "--json").stdout)
+            self.assertEqual(len(retired["events"]), 1)
+            self.assertEqual(retired["needs_revalidation"], 1)
+
+            replaced_project = Path(second)
+            replaced_goal = setup(replaced_project, "replace this")
+            self.run_script(replaced_project, "goals", "replace", replaced_goal["id"], "--with", "replacement")
+            self.run_script(replaced_project, "goals", "replace", replaced_goal["id"], "--with", "replacement")
+            replaced = json.loads(self.run_script(replaced_project, "impact", "show", "--json").stdout)
+            self.assertEqual(len(replaced["events"]), 1)
+            self.assertEqual(replaced["needs_revalidation"], 1)
+
+    def test_revalidating_one_impact_does_not_clear_others(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            subprocess.run(["git", "-C", str(project), "init"], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(project), "config", "user.email", "t@t.co"], check=True)
+            subprocess.run(["git", "-C", str(project), "config", "user.name", "Hao"], check=True)
+            (project / "one.py").write_text("one = 1\n")
+            (project / "two.py").write_text("two = 2\n")
+            goal = json.loads(self.run_script(project, "goals", "add", "temporary basis").stdout)["goal"]
+            self.run_script(
+                project,
+                "formation", "record",
+                "--claim", "Both files use the temporary basis",
+                "--basis-goal", goal["id"],
+                "--artifact", "one.py",
+                "--artifact", "two.py",
+                "--declared-by", "fixture-agent",
+                "--tier", "agent",
+            )
+            self.run_script(project, "goals", "retire", goal["id"])
+            before = json.loads(self.run_script(project, "impact", "show", "--json").stdout)
+            by_path = {item["artifact"]["path"]: item for item in before["items"]}
+            self.assertEqual(before["needs_revalidation"], 2)
+
+            self.run_script(project, "alignment", "record", "--label", "necessary_support", "--attested-by", "Hao")
+            after_alignment = json.loads(self.run_script(project, "impact", "show", "--json").stdout)
+            self.assertEqual(after_alignment["needs_revalidation"], 2)
+
+            first = json.loads(self.run_script(
+                project,
+                "impact", "revalidate", by_path["one.py"]["impact_id"],
+                "--decision", "retained",
+                "--attested-by", "Hao",
+            ).stdout)
+            self.assertTrue(first["revalidation"]["human_attested"])
+            self.assertEqual(first["revalidation"]["attested_by"], "Hao")
+            after_one = json.loads(self.run_script(project, "impact", "show", "--json").stdout)
+            states = {item["artifact"]["path"]: item["status"] for item in after_one["items"]}
+            self.assertEqual(states, {"one.py": "revalidated", "two.py": "needs_revalidation"})
+            self.assertEqual(after_one["needs_revalidation"], 1)
+
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.run_script(
+                    project,
+                    "impact", "revalidate", by_path["two.py"]["impact_id"],
+                    "--decision", "updated",
+                    "--attested-by", "",
+                )
+            unchanged = json.loads(self.run_script(project, "impact", "show", "--json").stdout)
+            self.assertEqual(unchanged["needs_revalidation"], 1)
+
     def test_abdication_is_visible_and_nudge_is_consumer_agnostic(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             project = Path(temp)
