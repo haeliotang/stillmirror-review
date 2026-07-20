@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-07-19T20:54:30.944035Z",
-  "since": "2026-04-20T20:54:30.909561Z",
+  "generated_at": "2026-07-20T11:42:08.122056Z",
+  "since": "2026-04-21T11:42:08.087722Z",
   "commits": 33,
   "maintainer_counts": {
     "release_packaging": 5,
