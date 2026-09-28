@@ -1,29 +1,22 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-09-21T15:37:24.352886Z",
-  "since": "2026-06-23T15:37:24.319859Z",
-  "commits": 33,
+  "generated_at": "2026-09-28T17:18:46.176810Z",
+  "since": "2026-06-30T17:18:46.165780Z",
+  "commits": 5,
   "maintainer_counts": {
-    "release_packaging": 5,
-    "other": 11,
-    "triage_responding": 6,
-    "docs": 5,
-    "bug_fixing": 2,
-    "feature": 2,
-    "infra": 2
+    "release_packaging": 1,
+    "other": 3,
+    "triage_responding": 1
   },
   "canonical_counts": {
-    "packaging_distribution": 10,
-    "exploration": 11,
-    "evaluation": 6,
-    "maintenance_debugging": 2,
-    "core_problem": 2,
-    "support_infrastructure": 2
+    "packaging_distribution": 1,
+    "exploration": 3,
+    "evaluation": 1
   },
   "authorship": {
     "bot": 0,
-    "attested": 11,
-    "human": 22,
+    "attested": 0,
+    "human": 5,
     "distinct_authors": 1,
     "distinct_human_authors": 1
   },
