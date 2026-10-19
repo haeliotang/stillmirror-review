@@ -1,24 +1,16 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-10-12T18:32:47.899147Z",
-  "since": "2026-07-14T18:32:47.886203Z",
-  "commits": 5,
-  "maintainer_counts": {
-    "release_packaging": 1,
-    "other": 3,
-    "triage_responding": 1
-  },
-  "canonical_counts": {
-    "packaging_distribution": 1,
-    "exploration": 3,
-    "evaluation": 1
-  },
+  "generated_at": "2026-10-19T16:09:11.476981Z",
+  "since": "2026-07-21T16:09:11.474407Z",
+  "commits": 0,
+  "maintainer_counts": {},
+  "canonical_counts": {},
   "authorship": {
     "bot": 0,
     "attested": 0,
-    "human": 5,
-    "distinct_authors": 1,
-    "distinct_human_authors": 1
+    "human": 0,
+    "distinct_authors": 0,
+    "distinct_human_authors": 0
   },
   "pr_issue_activity": null
 }
